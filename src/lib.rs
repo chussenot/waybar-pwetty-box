@@ -14,14 +14,17 @@
 //! Vulkan surface, so OpenGL (via femtovg) remains the rendering API.
 
 pub mod config;
+pub mod content;
 pub mod gl;
+pub mod markup;
 pub mod offscreen;
 pub mod render;
+pub mod text;
 pub mod tile;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use waybar_cffi::gtk::{self, prelude::*};
 use waybar_cffi::{waybar_module, InitInfo, Module};
@@ -61,10 +64,13 @@ impl Module for PwettyBox {
         area.set_hexpand(false);
         area.set_vexpand(false);
 
+        // Content source (static text / refreshing command), if configured.
+        let content = content::from_config(&config);
+
         // Surfaceless EGL needs no window, so the engine can come up at init.
         // femtovg renders into an image target; we composite with Cairo.
         let engine = match OffscreenGl::new() {
-            Ok(gl) => match Renderer::new(&config) {
+            Ok(gl) => match Renderer::new(&config, content.is_some()) {
                 Ok(renderer) => Some(Engine {
                     gl,
                     renderer,
@@ -88,12 +94,15 @@ impl Module for PwettyBox {
 
         {
             let shared = shared.clone();
+            let content_draw = content.clone();
             area.connect_draw(move |area, cr| {
+                let scale = area.scale_factor().max(1);
+
+                // Layer 1: the femtovg GPU layer (background / effects), rendered
+                // at device resolution and composited via Cairo.
                 if let Some(engine) = shared.engine.borrow_mut().as_mut() {
-                    let scale = area.scale_factor().max(1);
                     let w = (area.allocated_width().max(1) * scale) as u32;
                     let h = (area.allocated_height().max(1) * scale) as u32;
-
                     if engine.gl.make_current().is_ok() {
                         let time = engine.start.elapsed().as_secs_f32();
                         if let Ok((rw, rh, rgba)) =
@@ -103,6 +112,16 @@ impl Module for PwettyBox {
                         }
                     }
                 }
+
+                // Layer 2: the Pango text layer, drawn in logical coordinates
+                // (GTK rasterizes the Cairo context at device resolution, so the
+                // text stays crisp). Per-pixel alpha composites over layer 1.
+                if let Some(store) = &content_draw {
+                    let w = area.allocated_width().max(1) as f64;
+                    let h = area.allocated_height().max(1) as f64;
+                    draw_content(cr, &store.markup(), w, h, &shared.config);
+                }
+
                 glib_propagation_proceed()
             });
         }
@@ -111,6 +130,18 @@ impl Module for PwettyBox {
         if shared.config.fps > 0 {
             area.add_tick_callback(|area, _clock| {
                 area.queue_draw();
+                gtk::glib::ControlFlow::Continue
+            });
+        }
+
+        // Redraw when a content source publishes new content (e.g. a command
+        // refresh). Cheap poll of the dirty flag — content tiles can set fps: 0.
+        if let Some(store) = content {
+            let area = area.clone();
+            gtk::glib::timeout_add_local(Duration::from_millis(150), move || {
+                if store.take_dirty() {
+                    area.queue_draw();
+                }
                 gtk::glib::ControlFlow::Continue
             });
         }
@@ -150,11 +181,79 @@ fn paint_rgba(cr: &gtk::cairo::Context, w: usize, h: usize, mut rgba: Vec<u8>, d
         };
 
     // We rendered at device resolution; scale back so it fills the logical area.
+    // save/restore so this transform doesn't leak into the text layer.
+    let _ = cr.save();
     let s = 1.0 / device_scale;
     cr.scale(s, s);
     if cr.set_source_surface(&surface, 0.0, 0.0).is_ok() {
         let _ = cr.paint();
     }
+    let _ = cr.restore();
+}
+
+/// Custom effect tags routed away from Pango (see [`markup`]).
+const EFFECT_TAGS: &[&str] = &["box"];
+
+/// Draw the content's Pango markup onto `cr` within a `w`×`h` logical tile,
+/// rendering any custom effect tags (currently `<box>`) behind the text.
+/// Public so offscreen vision harnesses can exercise the exact compose path.
+pub fn draw_content(
+    cr: &gtk::cairo::Context,
+    content_markup: &str,
+    w: f64,
+    h: f64,
+    config: &Config,
+) {
+    let processed = markup::process(content_markup, EFFECT_TAGS);
+
+    let style = text::TextStyle {
+        font_family: "sans".into(),
+        size_px: config.font_size as f64,
+        color: (0.95, 0.95, 1.0, 1.0),
+        align_center: false,
+    };
+
+    let (layout, ox, oy) = text::layout(cr, &processed.markup, w, h, &style);
+
+    // Effects render behind the text.
+    for effect in &processed.effects {
+        if effect.tag == "box" {
+            let rect = text::span_rect(&layout, ox, oy, effect.start, effect.end);
+            draw_box(cr, rect, &effect.attrs);
+        }
+    }
+
+    text::paint(cr, &layout, ox, oy, &style);
+}
+
+/// Draw a `<box bg="#rrggbb[aa]">` rounded highlight behind a text span.
+fn draw_box(cr: &gtk::cairo::Context, rect: text::Rect, attrs: &[(String, String)]) {
+    let (x, y, w, h) = rect;
+    let pad = 4.0;
+    let (rx, ry, rw, rh) = (x - pad, y - pad, w + 2.0 * pad, h + 2.0 * pad);
+
+    let (r, g, b, a) = attrs
+        .iter()
+        .find(|(k, _)| k == "bg")
+        .and_then(|(_, v)| render::parse_hex_color(v))
+        .map(|c| (c.r as f64, c.g as f64, c.b as f64, c.a as f64))
+        .unwrap_or((0.35, 0.45, 0.85, 0.55));
+
+    rounded_rect(cr, rx, ry, rw, rh, rh * 0.32);
+    cr.set_source_rgba(r, g, b, a);
+    let _ = cr.fill();
+}
+
+/// Append a rounded-rectangle subpath to `cr`.
+fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    use std::f64::consts::PI;
+    let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
+    cr.new_sub_path();
+    cr.arc(x + w - r, y + r, r, -PI / 2.0, 0.0);
+    cr.arc(x + w - r, y + h - r, r, 0.0, PI / 2.0);
+    cr.arc(x + r, y + h - r, r, PI / 2.0, PI);
+    cr.arc(x + r, y + r, r, PI, 1.5 * PI);
+    cr.close_path();
 }
 
 #[inline]

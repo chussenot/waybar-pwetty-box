@@ -12,6 +12,10 @@
     "module_path": "/home/zor/Perso/pwetty-box-rs/target/release/libpwetty_box.so",
     "width": 360,
     "height": 64,
-    "fps": 60
+    "fps": 0,
+    "exec": "date '+%H:%M:%S'",
+    "interval": 1,
+    "font_size": 16,
+    "format": "<box bg='#31324488'><span size='xx-large' weight='bold' foreground='#89b4fa'>{}</span></box>"
   }
 }

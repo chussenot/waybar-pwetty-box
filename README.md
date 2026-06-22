@@ -3,11 +3,17 @@
 A [Waybar](https://github.com/Alexays/Waybar) **CFFI module** (Rust `cdylib`) that
 draws elaborate, multiline text/icon **tiles** on the GPU.
 
-Waybar loads the compiled `.so` in-process and hands the module a GTK widget. The
-module renders each tile with [femtovg](https://github.com/femtovg/femtovg) (a GPU
-2D canvas: paths, gradients, multiline text, font-glyph icons) into an **offscreen
-image**, then composites that onto a `GtkDrawingArea` with **Cairo** — which gives
-true per-pixel transparency against a translucent bar (see below).
+Waybar loads the compiled `.so` in-process and hands the module a GTK widget. Each
+tile is drawn as **two composited layers** onto a `GtkDrawingArea`:
+
+- a **GPU layer** — [femtovg](https://github.com/femtovg/femtovg) rendered into an
+  offscreen image on our own surfaceless EGL context (backgrounds, gradients, and
+  future shader effects);
+- a **text layer** — rich **Pango markup** drawn with PangoCairo on top.
+
+Both go through **Cairo**, which gives true per-pixel transparency against a
+translucent bar (see below) and lets **custom effect tags** (e.g. `<box>`) bridge
+the two — positioned via the Pango layout, drawn by the GPU/Cairo layer.
 
 ## Interoperability constraints (why it's built this way)
 
@@ -51,54 +57,94 @@ All keys live inside the `cffi/pwetty` block (parsed by `src/config.rs`):
 | Key | Default | Meaning |
 |---|---|---|
 | `width` / `height` | `220` / `36` | Tile size in logical pixels. |
-| `fps` | `60` | Animation framerate; `0` renders once (static). |
-| `font_path` | _(system fallback)_ | TTF/OTF for text. |
-| `icon_font_path` | _(unset)_ | Icon font (e.g. a Nerd Font) for glyph icons. |
-| `font_size` | `14.0` | Base font size in pixels. |
-| `background` | _(transparent)_ | Tile background as `#rrggbb` / `#rrggbbaa`. Leave unset for a **transparent** tile (the bar shows through); set it for an opaque tile background. |
+| `fps` | `60` | Animation framerate; `0` = static/content-driven (redraw only when content changes). |
+| `text` | _(unset)_ | Static value, substituted into `format` (escaped). Use for fixed content. |
+| `exec` | _(unset)_ | Shell command; its stdout is the value substituted into `format`. |
+| `interval` | `0` | Re-run cadence for `exec`, in seconds (`0` = run once). |
+| `icon` | _(unset)_ | Glyph prepended to the text (rendered via Pango font fallback). |
+| `format` | `"{}"` | **Pango markup** template; `{}` = the escaped `text`/`exec` value. May contain custom effect tags (see below). |
+| `font_size` | `14.0` | Base text size in pixels (per-span sizes via markup override it). |
+| `background` | _(transparent)_ | Tile background as `#rrggbb` / `#rrggbbaa`. Leave unset for a **transparent** tile (the bar shows through); set it for an opaque background. |
+| `font_path` / `icon_font_path` | _(system)_ | Fonts for the **demo tile** (femtovg) only; content tiles render via Pango using system fonts. |
+
+With no `text`/`exec`, the module renders the animated demo tile. With either set,
+it renders a content tile; `exec` refreshes on a background thread, so a slow
+command never blocks the bar.
+
+### Rich content & custom effects
+
+`format` is a **Pango markup** template, so content can be styled with the usual
+Pango spans — per-span colour, size, weight, font, plus `\n` for multiple lines:
+
+```jsonc
+"format": "<span size='xx-large' weight='bold' foreground='#89b4fa'>{}</span>\n<span size='small' foreground='#9399b2'>load</span>"
+```
+
+The substituted `{}` value is Pango-escaped, so command output can't break the
+markup. On top of standard Pango tags, **custom effect tags** are extracted and
+drawn by our own renderer, positioned via the Pango layout:
+
+```jsonc
+"format": "vol <box bg='#f38ba8cc'>{}</box>"   // rounded highlight behind the value
+```
+
+Currently `<box bg='#rrggbb[aa]'>` (a rounded highlight) is implemented; the same
+seam (`markup::process` → effect span → `text::span_rect` → draw) is where GPU
+shader effects (`<glow>`, `<shader>`) plug in next.
 
 ## Architecture / where to extend
 
 ```
 src/
-  lib.rs        CFFI Module impl — adds a GtkDrawingArea to Waybar's container;
-                its `draw` callback renders the tile offscreen and composites it
-                with Cairo (per-pixel alpha). GTK glue lives only here.
+  lib.rs        CFFI Module impl — adds a GtkDrawingArea to Waybar's container.
+                Its `draw` callback composes two layers: femtovg GPU layer +
+                Pango text layer (`draw_content`), with `<box>` effects between.
   offscreen.rs  OffscreenGl: a self-owned surfaceless EGL context (render node;
                 no window/seat/DRM-master) for running femtovg headless.
   gl.rs         Points the `epoxy` crate at the in-process libepoxy.
-  render.rs     femtovg Canvas lifecycle, font loading, `capture()` (render a
-                frame to an offscreen image + read back RGBA), `parse_hex_color`.
+  render.rs     femtovg Canvas lifecycle, `capture()` (render to an offscreen
+                image + read back RGBA), `parse_hex_color`.
   config.rs     serde Config deserialized from the `cffi/...` block.
-  tile.rs       >>> THE SEAM <<< the `Tile` trait + `TileContext` (geometry,
-                animation clock, fonts) + a `draw_multiline` helper. Add real
-                tiles here; `DemoTile` is the placeholder.
+  content.rs    TileContent + ContentStore (thread-safe) + sources (static text
+                or a command refreshed on a background thread) → a markup string.
+  markup.rs     >>> EFFECT SEAM <<< pure XML routing: split content into
+                Pango-safe markup + extracted custom-tag EffectSpans. Escaping,
+                `apply_format`. (Heavily unit-tested.)
+  text.rs       Pango/Cairo: lay out + paint markup; `span_rect` locates a span.
+  tile.rs       femtovg `Tile` trait + `TileContext` + the animated `DemoTile`
+                (shown when no content source is configured).
 ```
 
-Render flow per frame: `DrawingArea::draw` → make the EGL context current →
-`Renderer::capture` (femtovg paints all tiles into an offscreen image, reads back
-RGBA) → premultiply to Cairo `ARGB32` → paint onto the widget. Animation is driven
-off the GTK frame clock (`add_tick_callback` → `queue_draw`) when `fps > 0`.
+Render flow per frame: `DrawingArea::draw` → (1) make the EGL context current,
+`Renderer::capture` the femtovg background → premultiply → Cairo paint; (2)
+`draw_content`: `markup::process` the content → `text::layout` (Pango) → draw each
+effect span behind the text → `text::paint`. Redraws come from the frame clock
+(`fps > 0`) and/or a content dirty-flag poll.
 
-To add a tile: implement `Tile` in `tile.rs` (or a new module) and register it in
-`Renderer::new` (`render.rs`). `TileContext` gives you the femtovg `Canvas`, the
-draw size, a `time` clock for animation, and resolved fonts.
+**To add a custom effect** (e.g. `<glow>`, `<shader>`): add the tag name to
+`EFFECT_TAGS` in `lib.rs`, then handle it in `draw_content` — `text::span_rect`
+gives you the pixel rect of its text, into which you draw (Cairo, or a femtovg
+shader pass composited like the background layer).
 
 ## Testing & screenshots
 
-- **Unit tests** (`cargo test`): config deserialization and `parse_hex_color`
-  (pure logic — no GL context needed).
-- **Offscreen render** (`examples/render_tile.rs`): renders the tile to a PNG via
-  the surfaceless EGL context. Force software GL so it can't touch your display:
+- **Unit tests** (`cargo test`): the markup router (`markup.rs`, 14 tests),
+  content/`build_markup`, config deserialization, `parse_hex_color` — all pure
+  logic, no GL/GTK context needed.
+- **Vision tests** (offscreen → PNG, pure CPU, safe anywhere):
   ```bash
+  # rich text via Pango/Cairo
+  cargo run --example render_text -- out.png
+  # full content path (Pango markup + <box> effect) via draw_content
+  cargo run --example render_content -- out.png "<box bg='#a6e3a180'>42%</box>" 40
+  # the femtovg demo tile (surfaceless GL — force software so it can't touch your display)
   EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
     cargo run --example render_tile -- out.png [seconds]
   ```
-  This spawns no compositor and opens no Wayland/DRM device — safe to run anywhere.
+  Inspect the PNGs by eye — these caught a transparency bug no unit test could.
 - **Live waybar** (`test/`): `cage` (headless) → `niri` (nested) → `waybar` →
-  `grim`, driven by `test/shot.sh`. ⚠️ This runs a nested compositor stack; read
-  the safety notes in `test/shot.sh` before running it (prefer running it from a
-  separate TTY).
+  `grim`, driven by `test/shot.sh`. ⚠️ Runs a nested compositor stack; read the
+  safety notes in `test/shot.sh` (prefer a separate TTY).
 
 ## Notes
 

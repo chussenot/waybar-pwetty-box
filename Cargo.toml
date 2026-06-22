@@ -23,12 +23,18 @@ libloading = "0.8"
 # Our own surfaceless EGL context: we render femtovg offscreen and composite via
 # Cairo, because a GtkGLArea can't alpha-composite against a translucent bar.
 khronos-egl = { version = "6", features = ["static"] }
+# Rich text: Pango markup laid out and drawn onto the Cairo composite surface.
+pangocairo = "0.18"
+# Parse tile content (XML-ish) to route custom effect tags away from Pango.
+roxmltree = "0.20"
 # JSON config plumbed through from the waybar `cffi/...` block.
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 image = "0.25"
 serde_json = "1"
+# Enables cairo's `png` feature for the offscreen vision examples (write_to_png).
+cairo-rs = { version = "0.18", features = ["png"] }
 
 [profile.release]
 opt-level = 3

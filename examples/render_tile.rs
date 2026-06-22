@@ -31,7 +31,8 @@ fn main() {
     gl.make_current().expect("eglMakeCurrent");
     eprintln!("rendering {w}x{h} @ t={time}s");
 
-    let mut renderer = Renderer::new(&cfg).expect("femtovg renderer");
+    // false => no content source, so the renderer uses the animated DemoTile.
+    let mut renderer = Renderer::new(&cfg, false).expect("femtovg renderer");
     let (rw, rh, rgba) = renderer.capture(w, h, scale, time).expect("capture");
     // Drop the renderer (frees GL objects) while the context is still current.
     drop(renderer);

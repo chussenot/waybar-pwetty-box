@@ -10,8 +10,20 @@
     // --- everything below is this module's own config (see src/config.rs) ---
     "width": 360,
     "height": 64,
-    "fps": 60,
+    // Animation framerate. Use 0 for static/content-driven tiles (redraw on
+    // content change only); >0 to animate (e.g. the DemoTile gradient).
+    "fps": 0,
     "font_size": 14.0,
+
+    // --- content (omit all of these to get the animated demo tile) ---
+    // Static text (supports \n for multiline):
+    // "text": "hello\nworld",
+    // ...or a command, re-run every `interval` seconds (0 = once):
+    "exec": "date '+%H:%M:%S%n%a %d %b'",
+    "interval": 1,
+    // "icon": "",                 // glyph drawn before the text (needs icon_font_path)
+    // "format": "{}",              // template; {} = text/command output
+
     // Optional explicit fonts; omit to use system fallbacks.
     // "font_path": "/usr/share/fonts/TTF/Hack-Regular.ttf",
     // "icon_font_path": "/usr/share/fonts/TTF/SymbolsNerdFont-Regular.ttf",

@@ -40,7 +40,11 @@ impl Renderer {
     /// Build the femtovg canvas on the *currently-current* GL context. All
     /// rendering goes through [`Renderer::capture`] into an offscreen image
     /// target, so the default screen framebuffer is never used.
-    pub fn new(config: &Config) -> Result<Self, femtovg::ErrorKind> {
+    ///
+    /// `content_present`: when a content source is configured, the femtovg layer
+    /// only draws the background (the rich text is rendered on top with Pango);
+    /// otherwise it renders the animated [`DemoTile`].
+    pub fn new(config: &Config, content_present: bool) -> Result<Self, femtovg::ErrorKind> {
         gl::ensure_loaded();
         // SAFETY: a GL context is current.
         let renderer = unsafe { OpenGl::new_from_function(gl::proc_addr) }?;
@@ -60,12 +64,19 @@ impl Renderer {
             .and_then(parse_hex_color)
             .unwrap_or(Color::rgbaf(0.0, 0.0, 0.0, 0.0));
 
+        // With content, the femtovg layer is just the background (Pango draws the
+        // text on top); without it, show the animated demo tile.
+        let tiles: Vec<Box<dyn Tile>> = if content_present {
+            vec![]
+        } else {
+            vec![Box::new(DemoTile)]
+        };
+
         Ok(Self {
             canvas,
             fonts,
             background,
-            // Seam: real tiles get registered here. One demo tile for now.
-            tiles: vec![Box::new(DemoTile)],
+            tiles,
         })
     }
 

@@ -24,10 +24,23 @@ pub struct Config {
     /// Base font size in pixels.
     pub font_size: f32,
     /// Background cleared behind tiles, as a hex color (`#rrggbb` or
-    /// `#rrggbbaa`). NOTE: a `GtkGLArea` does not alpha-composite against the
-    /// bar, so a transparent background renders as opaque black — set this to
-    /// match your waybar background for a seamless look.
+    /// `#rrggbbaa`). Omit for a transparent tile (the bar shows through — the
+    /// Cairo composite honors per-pixel alpha); set it for an opaque tile.
     pub background: Option<String>,
+
+    // --- content source (see `crate::content`) ---
+    /// Static tile text. Supports `\n` for multiline. Ignored if `exec` is set.
+    pub text: Option<String>,
+    /// Shell command whose stdout becomes the tile text. Re-run every
+    /// `interval` seconds.
+    pub exec: Option<String>,
+    /// Re-run cadence for `exec`, in seconds. `0` runs it once.
+    pub interval: u64,
+    /// Static icon glyph (e.g. a Nerd Font character), drawn before the text.
+    pub icon: Option<String>,
+    /// Text template; `{}` is replaced by the static text / command output.
+    /// Defaults to `"{}"` (raw).
+    pub format: Option<String>,
 }
 
 impl Default for Config {
@@ -40,6 +53,11 @@ impl Default for Config {
             icon_font_path: None,
             font_size: 14.0,
             background: None,
+            text: None,
+            exec: None,
+            interval: 0,
+            icon: None,
+            format: None,
         }
     }
 }
