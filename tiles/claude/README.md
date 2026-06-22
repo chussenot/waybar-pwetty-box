@@ -68,7 +68,18 @@ pwetty list                 # bundled tiles
 pwetty schema claude        # print this tile's JSON Schema (the contract)
 pwetty check claude         # validate template ↔ schema ↔ samples
 pwetty render claude --all-states -o /tmp/claude   # PNGs of every bundled sample
+
+# ↓ the loop for building the data: render YOUR OWN json and eyeball it
+echo '{"shortcut":5,"state":"working","folder":"api","title":"…","unpushed":2}' \
+  | pwetty render claude --data - -o /tmp/claude
+pwetty render claude --data ./my-payload.json -o /tmp/claude
 ```
+
+`--data` is the key tool for the data layer: emit the JSON you plan to feed via
+`exec`, pipe it through `render --data`, and confirm the tile looks right before
+wiring it into waybar. Required fields depend on the layout (the schema's
+`if/then`): a Claude tile needs `state`; a window tile (`is_claude:false`) needs
+`app_icon`+`app`; only `shortcut` is always required.
 
 Sample payloads live in [`samples/`](./samples/) — one per state, used by
 `pwetty check`/`render` and the test suite.

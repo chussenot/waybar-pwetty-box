@@ -4,8 +4,25 @@
   "title": "claude tile data",
   "description": "Data object bound to the bundled `claude` tile's template. Feed it as the module's `exec` stdout (JSON) or static `text`. Each property notes whether the value is REAL (available from the claude-status-db daemon) or MOCK (synthesize it; not a session field yet).",
   "type": "object",
-  "required": ["shortcut", "state", "folder"],
+  "required": ["shortcut"],
   "additionalProperties": true,
+  "allOf": [
+    {
+      "comment": "Two layouts: a Claude session (default) vs an ordinary window.",
+      "if": {
+        "required": ["is_claude"],
+        "properties": { "is_claude": { "const": false } }
+      },
+      "then": {
+        "comment": "Window layout: needs the app icon + label, not state/folder.",
+        "required": ["app_icon", "app"]
+      },
+      "else": {
+        "comment": "Claude layout: needs the session state (folder recommended).",
+        "required": ["state"]
+      }
+    }
+  ],
   "properties": {
     "shortcut": {
       "type": ["integer", "string"],

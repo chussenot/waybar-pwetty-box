@@ -201,7 +201,11 @@ pwetty list                  # bundled tiles + their samples
 pwetty schema claude         # the tile's JSON Schema (the data contract)
 pwetty check claude          # validate template ↔ schema ↔ bundled samples
 pwetty render claude --all-states -o /tmp/out   # PNG per sample (needs surfaceless EGL)
+echo '{…your json…}' | pwetty render claude --data -   # render YOUR data, eyeball it
 ```
+
+The data layer's loop: read the schema, emit matching JSON, pipe it through
+`render --data` to confirm it looks right, then wire it into the module's `exec`.
 
 See `tiles/claude/` for the preset, schema, mocked samples, and a fuller
 binding-contract doc.

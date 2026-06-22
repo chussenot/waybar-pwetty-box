@@ -157,26 +157,40 @@ impl Module for PwettyBox {
                         let time = engine.start.elapsed().as_secs_f32();
                         let frame = engine.frame;
 
-                        // Layer 1: GPU background — a tile-level shader (when
-                        // `background_shader` is set) or the femtovg layer
-                        // (demo tile / background colour) — composited via Cairo.
+                        // Layer 1: background.
+                        // - A tile-level shader animates → render it each frame.
+                        // - A *content* tile with no shader has a STATIC background
+                        //   (transparent or a solid colour) → just fill it in Cairo,
+                        //   skipping the per-frame femtovg GPU render+readback (the
+                        //   big per-frame cost). The femtovg layer is only rendered
+                        //   for the demo tile (no content source).
                         engine.refresh_shader();
+                        let has_content = content_draw.is_some();
                         let bg: Option<Vec<u8>> = if let Some(sh) = engine.shader.as_mut() {
+                            engine.frame = engine.frame.wrapping_add(1);
                             Some(sh.render(wd as i32, hd as i32, time, frame, &shader_uniforms))
-                        } else if engine.shader_path.is_none() {
+                        } else if !has_content && engine.shader_path.is_none() {
                             engine
                                 .renderer
                                 .capture(wd, hd, scale as f32, time)
                                 .ok()
                                 .map(|(_, _, rgba)| rgba)
                         } else {
-                            None // shader configured but failed to compile
+                            None
                         };
-                        if engine.shader.is_some() {
-                            engine.frame = engine.frame.wrapping_add(1);
-                        }
                         if let Some(rgba) = bg {
                             composite_rgba(cr, wd as usize, hd as usize, rgba, scale as f64);
+                        } else if has_content && engine.shader_path.is_none() {
+                            // Static background for a content tile (cheap, no GPU).
+                            if let Some(c) = shared
+                                .config
+                                .background
+                                .as_deref()
+                                .and_then(render::parse_hex_color)
+                            {
+                                cr.set_source_rgba(c.r as f64, c.g as f64, c.b as f64, c.a as f64);
+                                let _ = cr.paint();
+                            }
                         }
 
                         // Layer 2: Pango text + span effects, in logical coords.
@@ -207,15 +221,31 @@ impl Module for PwettyBox {
         }
 
         // Animate by redrawing on the frame clock — for fps>0, a live shader, or
-        // an animated inline embed (scrolling ticker, blinking status).
+        // an animated inline embed (scrolling ticker, blinking status). The frame
+        // clock fires at the monitor's rate (~60Hz); we throttle queue_draw to a
+        // target fps so several animated tiles don't cook the CPU/GPU. The blink/
+        // pulse/ticker are smooth well below 60.
         let has_anim = shared
             .config
             .format
             .as_deref()
             .is_some_and(|f| f.contains("<tickerbox") || f.contains("<status"));
         if shared.config.fps > 0 || shared.config.background_shader.is_some() || has_anim {
-            area.add_tick_callback(|area, _clock| {
-                area.queue_draw();
+            let target_fps = if shared.config.fps > 0 {
+                shared.config.fps
+            } else {
+                DEFAULT_ANIM_FPS
+            };
+            let min_dt = 1_000_000 / target_fps.max(1) as i64; // microseconds
+            // 0 sentinel (not i64::MIN — `now - i64::MIN` overflows): the first
+            // tick's `now - 0` is huge, so it draws immediately, then throttles.
+            let last = std::cell::Cell::new(0i64);
+            area.add_tick_callback(move |area, clock| {
+                let now = clock.frame_time();
+                if now - last.get() >= min_dt {
+                    last.set(now);
+                    area.queue_draw();
+                }
                 gtk::glib::ControlFlow::Continue
             });
         }
@@ -356,6 +386,11 @@ fn paint_rgba_at(
 const EFFECT_TAGS: &[&str] = &["box", "glow"];
 /// Inline embed tags (sized elements placed in the text flow).
 const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon"];
+
+/// Default redraw rate for auto-animated tiles (blink/pulse/ticker) when the
+/// config doesn't pin `fps`. Well below the monitor's 60Hz — smooth enough for
+/// these animations and far cheaper. Override per-module with `fps`.
+const DEFAULT_ANIM_FPS: u32 = 20;
 
 /// GPU resources + timing a span effect needs (currently `<glow>`). Without it
 /// (e.g. a CPU-only caller), GPU span effects are skipped; `<box>` still draws.

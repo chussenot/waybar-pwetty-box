@@ -49,7 +49,9 @@ fn usage() {
          pwetty list\n  \
          pwetty schema <tile>\n  \
          pwetty check [tile]\n  \
-         pwetty render <tile> [--sample <name> | --all-states] [--time <s>] [-o <dir>]\n"
+         pwetty render <tile> [--sample <name> | --all-states | --data <file|->] [--time <s>] [-o <dir>]\n\n\
+         `render --data` renders YOUR JSON (the data you'll feed via exec) so you\n  \
+         can confirm it looks right before wiring it into waybar.\n"
     );
 }
 
@@ -179,6 +181,7 @@ fn cmd_render(rest: &[String]) -> ExitCode {
     let mut name: Option<String> = None;
     let mut sample: Option<String> = None;
     let mut all_states = false;
+    let mut data_path: Option<String> = None;
     let mut time: f32 = 0.4;
     let mut out_dir = PathBuf::from("/tmp/claude-1000/pwetty");
 
@@ -188,6 +191,10 @@ fn cmd_render(rest: &[String]) -> ExitCode {
             "--sample" => {
                 i += 1;
                 sample = rest.get(i).cloned();
+            }
+            "--data" => {
+                i += 1;
+                data_path = rest.get(i).cloned();
             }
             "--all-states" => all_states = true,
             "--time" => {
@@ -220,6 +227,52 @@ fn cmd_render(rest: &[String]) -> ExitCode {
 
     let cfg = config::resolve(serde_json::json!({ "tile": name }));
 
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        eprintln!("pwetty render: cannot create {}: {e}", out_dir.display());
+        return ExitCode::FAILURE;
+    }
+
+    // `--data <file|->`: render the caller's OWN JSON (the downstream agent's
+    // output) so they can confirm it renders before wiring it into waybar.
+    if let Some(path) = data_path {
+        let raw = if path == "-" {
+            use std::io::Read;
+            let mut s = String::new();
+            if std::io::stdin().read_to_string(&mut s).is_err() {
+                eprintln!("pwetty render: cannot read stdin");
+                return ExitCode::FAILURE;
+            }
+            s
+        } else {
+            match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("pwetty render: cannot read '{path}': {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        };
+        let data: Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("pwetty render: '{path}' is not valid JSON: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let markup = content::markup_for(&cfg, &data);
+        let out = out_dir.join(format!("{name}-data.png"));
+        return match pwetty_box::render_png(&cfg, &markup, time, &out) {
+            Ok(()) => {
+                println!("wrote {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("✗ {}: {e}", out.display());
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     // Which samples to render.
     let chosen: Vec<&(&str, &str)> = if all_states {
         preset.samples.iter().collect()
@@ -235,11 +288,6 @@ fn cmd_render(rest: &[String]) -> ExitCode {
         // Default: the first sample.
         preset.samples.iter().take(1).collect()
     };
-
-    if let Err(e) = std::fs::create_dir_all(&out_dir) {
-        eprintln!("pwetty render: cannot create {}: {e}", out_dir.display());
-        return ExitCode::FAILURE;
-    }
 
     let mut ok = true;
     for (sname, sjson) in chosen {
