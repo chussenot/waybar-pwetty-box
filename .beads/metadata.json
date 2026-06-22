@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "pwetty_box_rs",
+  "project_id": "06c92252-dbd9-4996-80f9-3af14df6ed99"
+}

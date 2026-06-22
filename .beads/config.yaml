@@ -1,0 +1,6 @@
+repos:
+  primary: "."
+  additional:
+    - "/home/zor/.beads-planning"
+
+export.auto: true
