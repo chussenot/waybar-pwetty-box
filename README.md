@@ -66,6 +66,7 @@ All keys live inside the `cffi/pwetty` block (parsed by `src/config.rs`):
 | `font_size` | `14.0` | Base text size in pixels (per-span sizes via markup override it). |
 | `background` | _(transparent)_ | Tile background as `#rrggbb` / `#rrggbbaa`. Leave unset for a **transparent** tile (the bar shows through); set it for an opaque background. |
 | `background_shader` | _(unset)_ | Path to a Shadertoy-style GLSL fragment shader rendered as the tile's animated background (see below). Hot-reloaded on file change. |
+| `shader_uniforms` | _(unset)_ | Map of `float` uniform → template (e.g. `{ "u_load": "{{ cpu.pct }}" }`), resolved from the data so the shader reacts to it. |
 | `font_path` / `icon_font_path` | _(system)_ | Fonts for the **demo tile** (femtovg) only; content tiles render via Pango using system fonts. |
 
 With no `text`/`exec`, the module renders the animated demo tile. With either set,
@@ -114,8 +115,21 @@ The shader defines `void mainImage(out vec4 fragColor, in vec2 fragCoord)` and
 receives `iResolution` / `iTime` / `iFrame` (paste-from-shadertoy.com friendly).
 It's rendered on our own GL context into a texture, read back, and composited as
 the background; the Pango content draws on top. The file is **hot-reloaded** when
-it changes, and compile errors are logged. Data-driven uniforms (a shader that
-reacts to `{{ cpu.pct }}`) are the planned next step.
+it changes, and compile errors are logged.
+
+**Data-reactive shaders.** `shader_uniforms` binds tile data into `float`
+uniforms the shader can use — so the background *responds* to the data:
+
+```jsonc
+"exec": "cpu-load.sh",                       // emits e.g. {"load": 6.4}
+"background_shader": "reactive.glsl",         // declares: uniform float u_load;
+"shader_uniforms": { "u_load": "{{ (load | float) / 8.0 }}" },
+"format": "<span weight='bold' foreground='#ffffff'>load {{ load }}</span>"
+```
+
+Each uniform value is a template evaluated against the data (`true`/`false` → 1/0,
+otherwise parsed as a float). See `examples/shaders/reactive.glsl` (calm teal →
+intense red as `u_load` rises).
 
 ## Architecture / where to extend
 

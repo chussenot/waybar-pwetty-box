@@ -56,8 +56,17 @@ impl ShaderPass {
     }
 
     /// Render one frame at `w`×`h` device pixels and read it back as RGBA8,
-    /// top-left origin (ready for [`crate::paint_rgba`]).
-    pub fn render(&mut self, w: i32, h: i32, time: f32, frame: i32) -> Vec<u8> {
+    /// top-left origin (ready for [`crate::paint_rgba`]). `uniforms` are extra
+    /// `float` uniforms (resolved from data) set by name; unknown names are
+    /// ignored.
+    pub fn render(
+        &mut self,
+        w: i32,
+        h: i32,
+        time: f32,
+        frame: i32,
+        uniforms: &[(String, f32)],
+    ) -> Vec<u8> {
         let mut buf = vec![0u8; (w.max(1) * h.max(1) * 4) as usize];
         unsafe { self.ensure_target(w, h) };
         let gl = &self.gl;
@@ -74,6 +83,12 @@ impl ShaderPass {
             }
             if let Some(loc) = gl.get_uniform_location(self.program, "iFrame") {
                 gl.uniform_1_i32(Some(&loc), frame);
+            }
+            // Data-driven uniforms (ignored if the shader doesn't declare them).
+            for (name, value) in uniforms {
+                if let Some(loc) = gl.get_uniform_location(self.program, name) {
+                    gl.uniform_1_f32(Some(&loc), *value);
+                }
             }
             gl.bind_vertex_array(Some(self.vao));
             gl.draw_arrays(glow::TRIANGLES, 0, 3);

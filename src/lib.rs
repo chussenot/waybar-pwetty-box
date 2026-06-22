@@ -135,6 +135,11 @@ impl Module for PwettyBox {
             let content_draw = content.clone();
             area.connect_draw(move |area, cr| {
                 let scale = area.scale_factor().max(1);
+                // Shader uniforms resolved from the current data (empty if none).
+                let shader_uniforms = content_draw
+                    .as_ref()
+                    .map(|s| s.uniforms())
+                    .unwrap_or_default();
 
                 // Layer 1: the GPU background, composited via Cairo. It's either a
                 // tile-level shader (when `background_shader` is set) or the
@@ -147,7 +152,7 @@ impl Module for PwettyBox {
                         engine.refresh_shader();
                         let frame = engine.frame;
                         let bg: Option<Vec<u8>> = if let Some(sh) = engine.shader.as_mut() {
-                            Some(sh.render(w as i32, h as i32, time, frame))
+                            Some(sh.render(w as i32, h as i32, time, frame, &shader_uniforms))
                         } else if engine.shader_path.is_none() {
                             engine
                                 .renderer

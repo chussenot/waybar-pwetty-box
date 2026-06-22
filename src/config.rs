@@ -4,6 +4,8 @@
 //! string key/value pairs; `waybar-cffi` collects them and hands us a
 //! `serde`-deserializable struct via the `Module::Config` associated type.
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,6 +46,11 @@ pub struct Config {
     /// Path to a Shadertoy-style GLSL fragment shader (defining `mainImage`)
     /// used as the tile's animated background. Reloaded when the file changes.
     pub background_shader: Option<String>,
+    /// Float uniforms fed to `background_shader` from the data: each value is a
+    /// template (e.g. `"{{ cpu.pct }}"`) evaluated against the tile data and
+    /// parsed as a float (`true`/`false` → 1/0). Declare matching
+    /// `uniform float <name>;` in the shader.
+    pub shader_uniforms: Option<HashMap<String, String>>,
 }
 
 impl Default for Config {
@@ -62,6 +69,7 @@ impl Default for Config {
             icon: None,
             format: None,
             background_shader: None,
+            shader_uniforms: None,
         }
     }
 }

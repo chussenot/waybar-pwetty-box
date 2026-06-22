@@ -11,6 +11,7 @@
 //! [`ContentStore`], so a slow command never blocks the GTK main loop; the
 //! widget polls the dirty flag and redraws when it flips.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -21,10 +22,12 @@ use serde_json::Value;
 use crate::config::Config;
 use crate::markup;
 
-/// What a tile currently displays: a Pango-markup string.
+/// What a tile currently displays: a Pango-markup string and the float uniforms
+/// (resolved from the data) for the background shader.
 #[derive(Debug, Clone, Default)]
 pub struct TileContent {
     pub markup: String,
+    pub uniforms: Vec<(String, f32)>,
 }
 
 /// Thread-safe, cloneable handle to the current tile content.
@@ -65,6 +68,15 @@ impl ContentStore {
             .unwrap_or_default()
     }
 
+    /// The current shader uniform values (resolved from the data).
+    pub fn uniforms(&self) -> Vec<(String, f32)> {
+        self.inner
+            .content
+            .lock()
+            .map(|g| g.uniforms.clone())
+            .unwrap_or_default()
+    }
+
     /// Clear and return the dirty flag — true if content changed since last call.
     pub fn take_dirty(&self) -> bool {
         self.inner.dirty.swap(false, Ordering::AcqRel)
@@ -78,6 +90,27 @@ const ICON_SCALE: f64 = 1.3;
 /// output as a string value (so plain-text commands still work via `{{ value }}`).
 fn parse_data(output: &str) -> Value {
     serde_json::from_str(output).unwrap_or_else(|_| Value::String(output.to_string()))
+}
+
+/// Parse a resolved uniform value: `true`/`false` → 1/0, otherwise a float
+/// (unparseable → 0).
+fn to_f32(s: &str) -> f32 {
+    match s.trim() {
+        "true" => 1.0,
+        "false" => 0.0,
+        other => other.parse().unwrap_or(0.0),
+    }
+}
+
+/// Resolve each `shader_uniforms` template against the data into a float.
+fn build_uniforms(spec: &HashMap<String, String>, data: &Value) -> Vec<(String, f32)> {
+    spec.iter()
+        .filter_map(|(name, tmpl)| {
+            markup::render_template(tmpl, data)
+                .ok()
+                .map(|s| (name.clone(), to_f32(&s)))
+        })
+        .collect()
 }
 
 /// Build a tile's markup: render the `template` against `data`, then prepend the
@@ -109,16 +142,19 @@ pub fn from_config(config: &Config) -> Option<ContentStore> {
         .unwrap_or_else(|| "{{ value }}".to_string());
     let icon = config.icon.clone();
     let base_px = config.font_size as f64;
+    let uniforms = config.shader_uniforms.clone().unwrap_or_default();
 
     if let Some(exec) = config.exec.clone() {
         let store = ContentStore::new(TileContent::default());
         let interval = config.interval;
         let publish = store.clone();
+        let (template, icon, uniforms) = (template.clone(), icon.clone(), uniforms.clone());
         // Detached: lives for the process (waybar modules are process-lifetime).
         thread::spawn(move || loop {
             let data = parse_data(&run_command(&exec));
             publish.set(TileContent {
                 markup: build_markup(&template, &icon, &data, base_px),
+                uniforms: build_uniforms(&uniforms, &data),
             });
             if interval == 0 {
                 break;
@@ -129,8 +165,10 @@ pub fn from_config(config: &Config) -> Option<ContentStore> {
     }
 
     config.text.as_deref().map(|text| {
+        let data = parse_data(text);
         ContentStore::new(TileContent {
-            markup: build_markup(&template, &icon, &parse_data(text), base_px),
+            markup: build_markup(&template, &icon, &data, base_px),
+            uniforms: build_uniforms(&uniforms, &data),
         })
     })
 }
@@ -148,7 +186,7 @@ fn run_command(cmd: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_markup, parse_data, ContentStore, TileContent};
+    use super::{build_markup, build_uniforms, parse_data, ContentStore, TileContent};
 
     #[test]
     fn build_markup_binds_data_and_prefixes_icon() {
@@ -188,8 +226,24 @@ mod tests {
         let s = ContentStore::new(TileContent::default());
         assert!(s.take_dirty(), "new store starts dirty");
         assert!(!s.take_dirty(), "cleared after read");
-        s.set(TileContent { markup: "x".into() });
+        s.set(TileContent {
+            markup: "x".into(),
+            ..Default::default()
+        });
         assert!(s.take_dirty(), "dirty again after set");
         assert_eq!(s.markup(), "x");
+    }
+
+    #[test]
+    fn build_uniforms_resolves_floats() {
+        use serde_json::json;
+        use std::collections::HashMap;
+        let mut spec = HashMap::new();
+        spec.insert("u_load".to_string(), "{{ pct }}".to_string());
+        spec.insert("u_hot".to_string(), "{{ pct >= 90 }}".to_string());
+        let u = build_uniforms(&spec, &json!({ "pct": 95 }));
+        let get = |n: &str| u.iter().find(|(k, _)| k == n).map(|(_, v)| *v);
+        assert_eq!(get("u_load"), Some(95.0));
+        assert_eq!(get("u_hot"), Some(1.0)); // bool true -> 1.0
     }
 }

@@ -10,13 +10,14 @@
 
   "cffi/pwetty": {
     "module_path": "/home/zor/Perso/pwetty-box-rs/target/release/libpwetty_box.so",
-    "width": 360,
+    "width": 320,
     "height": 72,
     "fps": 30,
-    "exec": "date '+{\"time\":\"%H:%M:%S\",\"date\":\"%a %d %b\"}'",
-    "interval": 1,
+    "exec": "echo '{\"load\":6.4}'",
+    "interval": 5,
     "font_size": 14,
-    "background_shader": "/home/zor/Perso/pwetty-box-rs/examples/shaders/aurora.glsl",
-    "format": "<span size='xx-large' weight='bold' foreground='#ffffff'>{{ time }}</span>\n<span size='small' foreground='#f0f0f0'>{{ date }}</span>"
+    "background_shader": "/home/zor/Perso/pwetty-box-rs/examples/shaders/reactive.glsl",
+    "shader_uniforms": { "u_load": "{{ (load | float) / 8.0 }}" },
+    "format": "<span size='small' foreground='#f0f0f0'>load</span>\n<span size='xx-large' weight='bold' foreground='#ffffff'>{{ load }}</span>"
   }
 }
