@@ -30,6 +30,10 @@ pub struct Config {
     /// comma-separated list is allowed (Pango picks the first available). When
     /// unset, falls back to `"sans"`.
     pub font_family: Option<String>,
+    /// Horizontal alignment of inline-embed flow content: `"center"` centers each
+    /// line within the tile width (for compact tiles); anything else (default)
+    /// left-aligns with a small pad.
+    pub align: Option<String>,
     /// Background cleared behind tiles, as a hex color (`#rrggbb` or
     /// `#rrggbbaa`). Omit for a transparent tile (the bar shows through — the
     /// Cairo composite honors per-pixel alpha); set it for an opaque tile.
@@ -139,6 +143,7 @@ impl Default for Config {
             font_size: 14.0,
             background: None,
             font_family: None,
+            align: None,
             text: None,
             exec: None,
             interval: 0,

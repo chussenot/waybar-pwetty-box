@@ -1,0 +1,9 @@
+{
+  "width": 56,
+  "height": 50,
+  "fps": 0,
+  "font_size": 15,
+  "font_family": "Terminus",
+  "align": "center",
+  "format": "{% if active %}<active/>{% endif %}<span size='large' weight='bold' foreground='#9399b2'>{{ shortcut }}</span>\n<status state=\"empty\"/>"
+}

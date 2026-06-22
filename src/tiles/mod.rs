@@ -43,8 +43,26 @@ const CLAUDE: TilePreset = TilePreset {
     ],
 };
 
+macro_rules! empty_dir {
+    ($p:literal) => {
+        concat!("../../tiles/empty/", $p)
+    };
+}
+
+/// Compact tile for an empty (windowless) desktop.
+const EMPTY: TilePreset = TilePreset {
+    name: "empty",
+    config: include_str!(empty_dir!("tile.json")),
+    schema: include_str!(empty_dir!("schema.json")),
+    doc: include_str!(empty_dir!("README.md")),
+    samples: &[
+        ("empty", include_str!(empty_dir!("samples/empty.json"))),
+        ("active", include_str!(empty_dir!("samples/active.json"))),
+    ],
+};
+
 /// All bundled presets.
-const PRESETS: &[TilePreset] = &[CLAUDE];
+const PRESETS: &[TilePreset] = &[CLAUDE, EMPTY];
 
 /// Look up a bundled preset by name.
 pub fn get(name: &str) -> Option<&'static TilePreset> {
@@ -71,6 +89,14 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(json)
                 .unwrap_or_else(|e| panic!("sample {name} is JSON: {e}"));
         }
+    }
+
+    #[test]
+    fn empty_preset_is_registered_and_well_formed() {
+        let p = get("empty").expect("empty preset present");
+        serde_json::from_str::<serde_json::Value>(p.config).expect("config is JSON");
+        serde_json::from_str::<serde_json::Value>(p.schema).expect("schema is JSON");
+        assert_eq!(p.samples.len(), 2);
     }
 
     #[test]

@@ -388,6 +388,12 @@ pub fn draw_content(
         align_center: false,
     };
 
+    // `<active/>` marks the focused desktop — a steady accent "card" behind the
+    // tile (drawn before the pulse group so it doesn't oscillate).
+    if processed.active {
+        draw_active_panel(cr, w, h);
+    }
+
     // `<pulse>` makes the whole tile's opacity oscillate (an attention signal):
     // render the content into a group, then paint it at a time-varying alpha.
     if processed.pulse {
@@ -397,7 +403,7 @@ pub fn draw_content(
     // Tiles with inline embeds compose explicitly (line-by-line, left-to-right);
     // tiles without use the richer wrapping + effect path.
     if !processed.embeds.is_empty() {
-        draw_flow(cr, &processed, h, config, &style, time, scale);
+        draw_flow(cr, &processed, w, h, config, &style, time, scale);
     } else {
         let (layout, ox, oy) = text::layout(cr, &processed.markup, w, h, &style);
 
@@ -512,15 +518,48 @@ struct Run {
     ink_h: f64,
 }
 
+/// Cap height for an inline symbol at item index `before`: the nearest preceding
+/// *inked* text run's ink height (its neighbour digit), else the line's tallest
+/// run, else a font-based fallback.
+fn cap_at(laid: &[Option<Run>], before: usize, line_h: f64) -> f64 {
+    laid[..before]
+        .iter()
+        .rev()
+        .flatten()
+        .map(|r| r.ink_h)
+        .find(|&hh| hh >= 1.0)
+        .or_else(|| {
+            let m = laid
+                .iter()
+                .flatten()
+                .map(|r| r.ink_h)
+                .fold(0.0_f64, f64::max);
+            (m >= 1.0).then_some(m)
+        })
+        .unwrap_or(line_h * 0.62)
+}
+
+/// Reserved advance width for an embed of `tag`.
+fn embed_ew(tag: &str, attrs: &[(String, String)], cap_h: f64) -> f64 {
+    match tag {
+        "status" => embed_width(attrs, cap_h * 1.7),
+        "icon" => embed_width(attrs, cap_h * 1.4),
+        "tickerbox" => embed_width(attrs, 160.0),
+        _ => 0.0,
+    }
+}
+
 /// Compose text + inline embeds across one or more lines (see [`flow_layout`]).
 /// Each run is vertically centered by its **ink box** on the line's mid-line (so
 /// a big number and smaller text sit centered together, not baseline-locked), and
 /// each inline symbol is sized to the ink box of its neighbouring text run and
 /// centered on the same mid-line — so a dot/`?`/cells line up with the digit
 /// beside them. Lines are stacked and the block vertically centered.
+#[allow(clippy::too_many_arguments)]
 fn draw_flow(
     cr: &gtk::cairo::Context,
     processed: &markup::Processed,
+    w: f64,
     h: f64,
     config: &Config,
     style: &text::TextStyle,
@@ -529,6 +568,7 @@ fn draw_flow(
 ) {
     let line_h = config.font_size as f64 * 1.4;
     let pad = config.font_size as f64 * 0.5; // left pad, width-agnostic
+    let center = config.align.as_deref() == Some("center");
     let lines = flow_layout(&processed.markup);
     let block_h = line_h * lines.len() as f64;
     let oy0 = ((h - block_h) / 2.0).max(0.0);
@@ -557,10 +597,30 @@ fn draw_flow(
             }
         }
 
-        // Second pass: center each run's ink box on the mid-line; size each symbol
-        // to the nearest preceding text run's ink (its neighbour digit), centered
-        // on the same mid-line.
-        let mut x = pad;
+        // Total advance of this line, so it can be centered within the tile.
+        let mut total = 0.0;
+        for (ii, item) in items.iter().enumerate() {
+            match *item {
+                FlowItem::Text(_) => {
+                    if let Some(run) = &laid[ii] {
+                        total += run.width;
+                    }
+                }
+                FlowItem::Embed(idx) => {
+                    if let Some(embed) = processed.embeds.get(idx) {
+                        total += embed_ew(&embed.tag, &embed.attrs, cap_at(&laid, ii, line_h));
+                    }
+                }
+            }
+        }
+
+        // Second pass: place runs (ink box centered on the mid-line) and symbols
+        // (sized to the neighbour digit, centered on the mid-line).
+        let mut x = if center {
+            ((w - total) / 2.0).max(0.0)
+        } else {
+            pad
+        };
         for (ii, item) in items.iter().enumerate() {
             match *item {
                 FlowItem::Text(_) => {
@@ -574,51 +634,25 @@ fn draw_flow(
                     let Some(embed) = processed.embeds.get(idx) else {
                         continue;
                     };
-                    // Symbols size to the nearest preceding *inked* text run (its
-                    // neighbour digit) so they read as a peer; if there's none
-                    // (e.g. adjacent icons separated by spaces), fall back to the
-                    // line's tallest run, then to a font-based cap.
-                    let cap_h = laid[..ii]
-                        .iter()
-                        .rev()
-                        .flatten()
-                        .map(|r| r.ink_h)
-                        .find(|&h| h >= 1.0)
-                        .or_else(|| {
-                            laid.iter()
-                                .flatten()
-                                .map(|r| r.ink_h)
-                                .fold(0.0_f64, f64::max)
-                                .into()
-                        })
-                        .filter(|&h| h >= 1.0)
-                        .unwrap_or(line_h * 0.62);
+                    let cap_h = cap_at(&laid, ii, line_h);
+                    let ew = embed_ew(&embed.tag, &embed.attrs, cap_h);
                     match embed.tag.as_str() {
-                        "status" => {
-                            let ew = embed_width(&embed.attrs, cap_h * 1.7);
-                            draw_status(
-                                cr,
-                                &embed.attrs,
-                                x + ew / 2.0,
-                                center_y,
-                                cap_h,
-                                &style.font_family,
-                                time,
-                            );
-                            x += ew;
-                        }
-                        "icon" => {
-                            let ew = embed_width(&embed.attrs, cap_h * 1.4);
-                            draw_icon(cr, &embed.attrs, x + ew / 2.0, center_y, cap_h, scale);
-                            x += ew;
-                        }
+                        "status" => draw_status(
+                            cr,
+                            &embed.attrs,
+                            x + ew / 2.0,
+                            center_y,
+                            cap_h,
+                            &style.font_family,
+                            time,
+                        ),
+                        "icon" => draw_icon(cr, &embed.attrs, x + ew / 2.0, center_y, cap_h, scale),
                         "tickerbox" => {
-                            let ew = embed_width(&embed.attrs, 160.0);
-                            draw_ticker(cr, &embed.inner, (x, ly, ew, line_h), config, time);
-                            x += ew;
+                            draw_ticker(cr, &embed.inner, (x, ly, ew, line_h), config, time)
                         }
                         _ => {}
                     }
+                    x += ew;
                 }
             }
         }
@@ -683,7 +717,7 @@ fn draw_status(
         // riding the same oscillation. Electric hues, punchier than the daemon's.
         "working" => {
             let a = osc(time, 2.0, 0.15);
-            glow_halo(cr, cx, cy, cap_h * 0.95, "#ff5a14", a * 0.35);
+            glow_halo(cr, cx, cy, cap_h * 1.1, "#ff5a14", a * 0.5);
             fill_circle(cr, cx, cy, r, "#ff5a14", a);
         }
         "shell" => {
@@ -704,8 +738,39 @@ fn draw_status(
                 .min(IDLE_LEVELS.len() - 1);
             draw_idle_cells(cr, cx, cy, cap_h, IDLE_LEVELS[level]);
         }
+        // An empty desktop: a dim hollow ring (no activity), digit-sized.
+        "empty" => draw_ring(cr, cx, cy, r, "#6c7086"),
         _ => {}
     }
+}
+
+/// Draw a hollow ring (outline circle) of `hex` at `(cx, cy)`, radius `r`.
+fn draw_ring(cr: &gtk::cairo::Context, cx: f64, cy: f64, r: f64, hex: &str) {
+    set_hex(cr, hex, 1.0);
+    cr.set_line_width((r * 0.30).max(1.0));
+    cr.new_sub_path(); // detach from any leftover current point (else arc() connects)
+    cr.arc(cx, cy, r, 0.0, std::f64::consts::TAU);
+    let _ = cr.stroke();
+}
+
+/// Draw the active-desktop accent: a rounded "card" — a faint accent fill plus a
+/// brighter accent border — inset within the `w`×`h` tile, behind the content.
+fn draw_active_panel(cr: &gtk::cairo::Context, w: f64, h: f64) {
+    let inset = 2.0;
+    let (x, y, pw, ph) = (
+        inset,
+        inset,
+        (w - 2.0 * inset).max(0.0),
+        (h - 2.0 * inset).max(0.0),
+    );
+    let r = ph * 0.20;
+    rounded_rect(cr, x, y, pw, ph, r);
+    set_hex(cr, "#89b4fa", 0.12);
+    let _ = cr.fill();
+    rounded_rect(cr, x, y, pw, ph, r);
+    set_hex(cr, "#89b4fa", 0.75);
+    cr.set_line_width(1.5);
+    let _ = cr.stroke();
 }
 
 /// Rasterized icon buffers keyed by (source, device px, tint) — an ARGB32 buffer
@@ -807,6 +872,7 @@ fn paint_argb32_at(
 /// Fill a circle of `hex` colour at `(cx, cy)` with the given alpha multiplier.
 fn fill_circle(cr: &gtk::cairo::Context, cx: f64, cy: f64, r: f64, hex: &str, alpha: f64) {
     set_hex(cr, hex, alpha);
+    cr.new_sub_path(); // detach from any leftover current point (else arc() connects)
     cr.arc(cx, cy, r, 0.0, std::f64::consts::TAU);
     let _ = cr.fill();
 }
@@ -823,6 +889,7 @@ fn glow_halo(cr: &gtk::cairo::Context, cx: f64, cy: f64, radius: f64, hex: &str,
     grad.add_color_stop_rgba(0.45, r, g, b, alpha * 0.45);
     grad.add_color_stop_rgba(1.0, r, g, b, 0.0);
     if cr.set_source(&grad).is_ok() {
+        cr.new_sub_path(); // detach from any leftover current point
         cr.arc(cx, cy, radius, 0.0, std::f64::consts::TAU);
         let _ = cr.fill();
     }

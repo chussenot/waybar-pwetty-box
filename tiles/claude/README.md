@@ -43,6 +43,7 @@ The `exec` stdout (or static `text`) must be a JSON object matching
 | `title`      | string          | MOCK   | window title; scrolls as a marquee |
 | `unpushed`   | integer         | MOCK   | unpushed commit count; shown as `↑N` in the marquee, hidden when 0 |
 | `idle_ago`   | string          | REAL-derived | when `state=idle`: "time since active", e.g. `12m` (shown as `12m ago`) |
+| `active`     | boolean         | niri   | focused desktop → an accent "card" (fill + border) so it stands out |
 | `is_claude`  | boolean         | derive | `true` → the status/folder layout; `false` → the app-icon layout (below) |
 | `app`        | string          | window | `is_claude=false` only: the app/window label |
 | `app_icon`   | string          | window | `is_claude=false` only: a bundled icon name or an absolute `.svg` path |

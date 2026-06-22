@@ -54,10 +54,15 @@ pub struct Processed {
     /// opacity should oscillate (an attention signal). The wrapper itself emits
     /// no markup; its children render normally.
     pub pulse: bool,
+    /// Whether the content contained an `<active/>` marker — this desktop is the
+    /// focused one; the renderer draws an accent panel behind the tile.
+    pub active: bool,
 }
 
 /// Structural tag that flags the whole tile to pulse (see [`Processed::pulse`]).
 pub const PULSE_TAG: &str = "pulse";
+/// Structural marker tag that flags the tile as the active desktop.
+pub const ACTIVE_TAG: &str = "active";
 
 /// Escape for safe insertion into Pango markup — text *and* attribute values
 /// (hence quotes too).
@@ -177,7 +182,11 @@ fn walk_children(
             out.plain.push_str(text);
         } else if child.is_element() {
             let tag = child.tag_name().name();
-            if tag == PULSE_TAG {
+            if tag == ACTIVE_TAG {
+                // Active-desktop marker: flag it; render any children normally.
+                out.active = true;
+                walk_children(child, effect_tags, embed_tags, out);
+            } else if tag == PULSE_TAG {
                 // Attention wrapper: flag the tile to pulse; emit no tag of its
                 // own — its children render normally.
                 out.pulse = true;

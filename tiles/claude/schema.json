@@ -45,6 +45,11 @@
       "description": "MOCK. Count of commits not yet pushed on the session's repo; shown as ↑N (hidden when 0). Not a daemon field — compute it yourself.",
       "examples": [3]
     },
+    "active": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this is the focused/active niri desktop. When true, the tile gets an accent 'card' (fill + border) to stand out from the others."
+    },
     "is_claude": {
       "type": "boolean",
       "default": true,

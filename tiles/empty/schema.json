@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "pwetty:tile/empty",
+  "title": "empty desktop tile data",
+  "description": "Data for the compact `empty` tile — a narrow, center-aligned representation of a niri desktop with no windows: just the shortcut number stacked over a dim 'empty' ring.",
+  "type": "object",
+  "required": ["shortcut"],
+  "additionalProperties": true,
+  "properties": {
+    "shortcut": {
+      "type": ["integer", "string"],
+      "description": "MOCK. The desktop's shortcut number.",
+      "examples": [7]
+    },
+    "active": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this is the focused desktop (accent card when true)."
+    }
+  }
+}

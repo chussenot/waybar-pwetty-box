@@ -53,6 +53,7 @@ fn main() {
         height: h,
         font_size,
         font_family: std::env::var("PWETTY_FONT").ok(),
+        align: std::env::var("PWETTY_ALIGN").ok(),
         ..Config::default()
     };
 

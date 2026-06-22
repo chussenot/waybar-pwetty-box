@@ -180,11 +180,17 @@ module's own keys win:
 Override any preset field inline (`"width": 360`), or point at an external file
 to iterate without rebuilding (`"tile_file": "/path/tile.json"`).
 
-The bundled **`claude`** tile renders a niri desktop running a Claude session:
-shortcut number, an animated session-status indicator (`working`→blinking orange
-dot, `prompt`→blinking `?`, `shell`→pulsing cyan dot, `idle`→a fade bar that dims
-with `idle_level`), the folder name, an `↑N` unpushed-commits badge, and a
-scrolling window-title marquee.
+These tiles are really niri **desktop** tiles. Two ship:
+
+- **`claude`** — a desktop running a Claude session: shortcut number, an animated
+  session-status indicator (`working`→deep orange blink, `prompt`→pulsing `?`,
+  `shell`→electric-cyan pulse, `idle`→a fade bar by `idle_level`, each with a
+  color-matched glow), the folder, an `↑N` unpushed-commits badge, and a scrolling
+  window-title marquee. When the desktop holds an ordinary window instead
+  (`is_claude=false`), it shows the app icon + name. The **focused** desktop
+  (`active=true`) gets an accent card.
+- **`empty`** — a compact, narrow tile for a windowless desktop: just the shortcut
+  number stacked over a dim "empty" ring, center-aligned. (`tile: "empty"`.)
 
 The data source is **decoupled**: a tile declares the JSON it wants via a
 JSON Schema, and the `pwetty` CLI surfaces that contract so a separate
