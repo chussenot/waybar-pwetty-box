@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
+use serde_json::Value;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -25,6 +26,10 @@ pub struct Config {
     pub icon_font_path: Option<String>,
     /// Base font size in pixels.
     pub font_size: f32,
+    /// Pango font family for tile text (e.g. `"Terminus"`, `"monospace"`). A
+    /// comma-separated list is allowed (Pango picks the first available). When
+    /// unset, falls back to `"sans"`.
+    pub font_family: Option<String>,
     /// Background cleared behind tiles, as a hex color (`#rrggbb` or
     /// `#rrggbbaa`). Omit for a transparent tile (the bar shows through — the
     /// Cairo composite honors per-pixel alpha); set it for an opaque tile.
@@ -53,6 +58,76 @@ pub struct Config {
     pub shader_uniforms: Option<HashMap<String, String>>,
 }
 
+/// Deep-merge `over` into `base`: two objects merge key-by-key (recursively);
+/// any other value in `over` (scalar, array, null) replaces `base` wholesale.
+/// Used to layer a bundled tile preset (base) under a waybar module config
+/// (over) so the module's own keys win.
+pub fn merge(base: &mut Value, over: &Value) {
+    match (base, over) {
+        (Value::Object(b), Value::Object(o)) => {
+            for (k, v) in o {
+                merge(b.entry(k.clone()).or_insert(Value::Null), v);
+            }
+        }
+        (b, o) => *b = o.clone(),
+    }
+}
+
+/// The preset JSON to layer under `raw`, if it names one. `tile_file` (an
+/// external path) takes precedence over `tile` (a bundled preset name). A bad
+/// path / unknown name / malformed preset logs and yields `None` (so the raw
+/// config is used as-is).
+fn preset_for(raw: &Value) -> Option<Value> {
+    if let Some(path) = raw.get("tile_file").and_then(Value::as_str) {
+        return match std::fs::read_to_string(path) {
+            Ok(s) => parse_preset(&s, path),
+            Err(e) => {
+                eprintln!("pwetty-box: cannot read tile_file '{path}': {e}");
+                None
+            }
+        };
+    }
+    if let Some(name) = raw.get("tile").and_then(Value::as_str) {
+        return match crate::tiles::get(name) {
+            Some(p) => parse_preset(p.config, name),
+            None => {
+                eprintln!("pwetty-box: unknown tile preset '{name}'");
+                None
+            }
+        };
+    }
+    None
+}
+
+fn parse_preset(src: &str, label: &str) -> Option<Value> {
+    match serde_json::from_str(src) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            eprintln!("pwetty-box: invalid tile preset '{label}': {e}");
+            None
+        }
+    }
+}
+
+/// Resolve a raw waybar module config (JSON `Value`) into a typed [`Config`],
+/// layering a bundled/file tile preset underneath when `tile`/`tile_file` is
+/// set (the module's own keys win). Unknown keys (`tile`, `tile_file`) are
+/// ignored by the typed deserialize. On a hard deserialize error, logs and
+/// falls back to defaults rather than panicking inside the CFFI boundary.
+pub fn resolve(raw: Value) -> Config {
+    let merged = match preset_for(&raw) {
+        Some(mut base) => {
+            merge(&mut base, &raw);
+            base
+        }
+        None => raw,
+    };
+    serde_json::from_value(merged).unwrap_or_else(|e| {
+        eprintln!("pwetty-box: invalid config: {e}");
+        Config::default()
+    })
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -63,6 +138,7 @@ impl Default for Config {
             icon_font_path: None,
             font_size: 14.0,
             background: None,
+            font_family: None,
             text: None,
             exec: None,
             interval: 0,
@@ -76,7 +152,50 @@ impl Default for Config {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{merge, resolve, Config};
+    use serde_json::json;
+
+    #[test]
+    fn merge_object_keys_recursively_over_wins() {
+        let mut base = json!({ "a": 1, "b": { "x": 1, "y": 2 }, "c": 3 });
+        merge(&mut base, &json!({ "b": { "y": 20, "z": 30 }, "c": 99 }));
+        assert_eq!(
+            base,
+            json!({ "a": 1, "b": { "x": 1, "y": 20, "z": 30 }, "c": 99 })
+        );
+    }
+
+    #[test]
+    fn merge_scalar_and_array_replace_not_merge() {
+        let mut base = json!({ "arr": [1, 2, 3], "s": "old" });
+        merge(&mut base, &json!({ "arr": [9], "s": "new" }));
+        assert_eq!(base, json!({ "arr": [9], "s": "new" }));
+    }
+
+    #[test]
+    fn resolve_layers_bundled_preset_under_module_keys() {
+        // `tile: claude` brings width 300 / height 50 / a format; the module
+        // overrides width and adds exec. Module keys win; preset fills the rest.
+        let c = resolve(json!({ "tile": "claude", "width": 360, "exec": "echo" }));
+        assert_eq!(c.width, 360); // module override wins
+        assert_eq!(c.height, 50); // from preset
+        assert_eq!(c.exec.as_deref(), Some("echo"));
+        assert!(c.format.as_deref().unwrap().contains("<status"));
+    }
+
+    #[test]
+    fn resolve_without_tile_is_plain_config() {
+        let c = resolve(json!({ "width": 123 }));
+        assert_eq!(c.width, 123);
+        assert_eq!(c.height, 36); // default
+    }
+
+    #[test]
+    fn resolve_unknown_tile_falls_back_to_raw() {
+        let c = resolve(json!({ "tile": "ghost", "width": 77 }));
+        assert_eq!(c.width, 77);
+        assert_eq!(c.height, 36); // no preset applied
+    }
 
     #[test]
     fn default_values() {

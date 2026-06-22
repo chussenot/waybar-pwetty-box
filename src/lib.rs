@@ -20,14 +20,17 @@ pub mod markup;
 pub mod offscreen;
 pub mod render;
 pub mod shader;
+pub mod svg;
 pub mod text;
 pub mod tile;
+pub mod tiles;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
-use waybar_cffi::gtk::{self, prelude::*};
+use waybar_cffi::gtk::{self, pango, prelude::*};
 use waybar_cffi::{waybar_module, InitInfo, Module};
 
 use config::Config;
@@ -90,9 +93,12 @@ pub struct PwettyBox {
 }
 
 impl Module for PwettyBox {
-    type Config = Config;
+    // Take the raw JSON so we can layer a bundled tile preset (`"tile": "..."`)
+    // under it before deserializing into the typed `Config`.
+    type Config = serde_json::Value;
 
-    fn init(info: &InitInfo, config: Config) -> Self {
+    fn init(info: &InitInfo, raw: serde_json::Value) -> Self {
+        let config = config::resolve(raw);
         let container = info.get_root_widget();
 
         let area = gtk::DrawingArea::new();
@@ -201,13 +207,13 @@ impl Module for PwettyBox {
         }
 
         // Animate by redrawing on the frame clock — for fps>0, a live shader, or
-        // a scrolling ticker.
-        let has_ticker = shared
+        // an animated inline embed (scrolling ticker, blinking status).
+        let has_anim = shared
             .config
             .format
             .as_deref()
-            .is_some_and(|f| f.contains("<tickerbox"));
-        if shared.config.fps > 0 || shared.config.background_shader.is_some() || has_ticker {
+            .is_some_and(|f| f.contains("<tickerbox") || f.contains("<status"));
+        if shared.config.fps > 0 || shared.config.background_shader.is_some() || has_anim {
             area.add_tick_callback(|area, _clock| {
                 area.queue_draw();
                 gtk::glib::ControlFlow::Continue
@@ -231,6 +237,61 @@ impl Module for PwettyBox {
 
         PwettyBox { _shared: shared }
     }
+}
+
+/// Render `markup` for `config`'s tile size to an RGBA PNG at `out`, via the
+/// exact offscreen compose path the live widget uses (femtovg background layer +
+/// Cairo [`draw_content`]) on a translucent dark backing (so transparent tiles
+/// stay visible). Pure CPU + surfaceless EGL, so it's safe anywhere — used by
+/// the `pwetty` CLI and the vision harness. Run with `EGL_PLATFORM=surfaceless
+/// LIBGL_ALWAYS_SOFTWARE=1` for a headless software render.
+pub fn render_png(
+    config: &Config,
+    markup: &str,
+    time: f32,
+    out: &std::path::Path,
+) -> Result<(), String> {
+    use gtk::cairo::{Context, Format, ImageSurface};
+
+    let w = config.width.max(1);
+    let h = config.height.max(1);
+    let surface = ImageSurface::create(Format::ARgb32, w, h).map_err(|e| e.to_string())?;
+    let cr = Context::new(&surface).map_err(|e| e.to_string())?;
+
+    // Translucent dark backing, like a bar, so transparent tiles are visible.
+    cr.set_source_rgba(
+        0x1e as f64 / 255.0,
+        0x1e as f64 / 255.0,
+        0x2e as f64 / 255.0,
+        0.85,
+    );
+    let _ = cr.paint();
+
+    let gl = OffscreenGl::new().map_err(|e| format!("offscreen EGL: {e:?}"))?;
+    gl.make_current()
+        .map_err(|e| format!("make_current: {e:?}"))?;
+
+    // Faithful to the live content path: femtovg background first (it dirties GL
+    // state), then the Pango content + span effects on top.
+    if let Ok(mut renderer) = Renderer::new(config, true) {
+        if let Ok((rw, rh, rgba)) = renderer.capture(w as u32, h as u32, 1.0, time) {
+            composite_rgba(&cr, rw, rh, rgba, 1.0);
+        }
+    }
+
+    let mut cache = shader::ShaderCache::new();
+    let mut fx = EffectCtx {
+        shaders: &mut cache,
+        time,
+        frame: 0,
+        scale: 1.0,
+    };
+    draw_content(&cr, markup, w as f64, h as f64, config, Some(&mut fx));
+
+    drop(cr);
+    let mut f = std::fs::File::create(out).map_err(|e| e.to_string())?;
+    surface.write_to_png(&mut f).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Composite an offscreen RGBA8 buffer (straight alpha, top-left origin) onto the
@@ -294,7 +355,7 @@ fn paint_rgba_at(
 /// Custom effect tags (decorations drawn behind a span).
 const EFFECT_TAGS: &[&str] = &["box", "glow"];
 /// Inline embed tags (sized elements placed in the text flow).
-const EMBED_TAGS: &[&str] = &["tickerbox"];
+const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon"];
 
 /// GPU resources + timing a span effect needs (currently `<glow>`). Without it
 /// (e.g. a CPU-only caller), GPU span effects are skipped; `<box>` still draws.
@@ -317,90 +378,509 @@ pub fn draw_content(
     mut fx: Option<&mut EffectCtx>,
 ) {
     let time = fx.as_ref().map(|f| f.time).unwrap_or(0.0);
+    let scale = fx.as_ref().map(|f| f.scale).unwrap_or(1.0);
     let processed = markup::process(content_markup, EFFECT_TAGS, EMBED_TAGS);
 
     let style = text::TextStyle {
-        font_family: "sans".into(),
+        font_family: font_family(config),
         size_px: config.font_size as f64,
         color: (0.95, 0.95, 1.0, 1.0),
         align_center: false,
     };
 
-    // Tiles with inline embeds compose left-to-right on a single line; tiles
-    // without use the richer wrapping + effect path.
-    if !processed.embeds.is_empty() {
-        draw_inline(cr, &processed, w, h, config, &style, time);
-        return;
+    // `<pulse>` makes the whole tile's opacity oscillate (an attention signal):
+    // render the content into a group, then paint it at a time-varying alpha.
+    if processed.pulse {
+        cr.push_group();
     }
 
-    let (layout, ox, oy) = text::layout(cr, &processed.markup, w, h, &style);
+    // Tiles with inline embeds compose explicitly (line-by-line, left-to-right);
+    // tiles without use the richer wrapping + effect path.
+    if !processed.embeds.is_empty() {
+        draw_flow(cr, &processed, h, config, &style, time, scale);
+    } else {
+        let (layout, ox, oy) = text::layout(cr, &processed.markup, w, h, &style);
 
-    // Effects render behind the text.
-    for effect in &processed.effects {
-        let rect = text::span_rect(&layout, ox, oy, effect.start, effect.end);
-        match effect.tag.as_str() {
-            "box" => draw_box(cr, rect, &effect.attrs),
-            "glow" => {
-                if let Some(fx) = fx.as_deref_mut() {
-                    draw_glow(cr, rect, &effect.attrs, fx);
+        // Effects render behind the text.
+        for effect in &processed.effects {
+            let rect = text::span_rect(&layout, ox, oy, effect.start, effect.end);
+            match effect.tag.as_str() {
+                "box" => draw_box(cr, rect, &effect.attrs),
+                "glow" => {
+                    if let Some(fx) = fx.as_deref_mut() {
+                        draw_glow(cr, rect, &effect.attrs, fx);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        text::paint(cr, &layout, ox, oy, &style);
+    }
+
+    if processed.pulse {
+        let _ = cr.pop_group_to_source();
+        // Bright floor (0.4): the tile dims but never disappears.
+        let _ = cr.paint_with_alpha(osc(time, PULSE_PERIOD, 0.40));
+    }
+}
+
+/// Measured rendered ink extents `(top, height)` keyed by (run markup, family,
+/// base size ×4) — so we don't re-rasterize-and-scan a run every frame.
+type InkCache = HashMap<(String, String, u32), (f64, f64)>;
+
+thread_local! {
+    static INK_CACHE: RefCell<InkCache> = RefCell::new(HashMap::new());
+}
+
+/// True rendered ink `(top, height)` of a flow text run, cached. Falls back to a
+/// reasonable cap box if measurement fails.
+fn run_ink(seg: &str, family: &str, base_px: f64) -> (f64, f64) {
+    let key = (
+        seg.to_string(),
+        family.to_string(),
+        (base_px * 4.0).round() as u32,
+    );
+    INK_CACHE.with(|c| {
+        *c.borrow_mut().entry(key).or_insert_with(|| {
+            text::ink_extent(seg, family, base_px).unwrap_or((base_px * 0.25, base_px * 0.72))
+        })
+    })
+}
+
+/// The tile's Pango font family — configured, or `"sans"` by default.
+fn font_family(config: &Config) -> String {
+    config
+        .font_family
+        .clone()
+        .unwrap_or_else(|| "sans".to_string())
+}
+
+/// The `width` attribute of an embed, in logical px (falls back to `default`).
+fn embed_width(attrs: &[(String, String)], default: f64) -> f64 {
+    attr(attrs, "width")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+/// One element of a flow line: a text run, or a reference to an embed (by index
+/// into `Processed::embeds`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FlowItem<'a> {
+    Text(&'a str),
+    Embed(usize),
+}
+
+/// Split flow `markup` into lines of [`FlowItem`]s, preserving document order.
+/// `markup` keeps literal `\n` and the embed placeholders in order, and
+/// `Processed::embeds` is in that same order — so a single front cursor over
+/// embed indices matches placeholders as they're encountered (top→bottom,
+/// left→right). N placeholders split a line into N+1 segments with an embed in
+/// each gap; empty segments (e.g. adjacent embeds, or a leading placeholder)
+/// emit no text item.
+fn flow_layout(markup: &str) -> Vec<Vec<FlowItem<'_>>> {
+    let mut embed_idx = 0;
+    markup
+        .split('\n')
+        .map(|line| {
+            let segments: Vec<&str> = line.split(markup::EMBED_PLACEHOLDER).collect();
+            let n_seg = segments.len();
+            let mut items = Vec::new();
+            for (si, seg) in segments.iter().enumerate() {
+                if !seg.is_empty() {
+                    items.push(FlowItem::Text(seg));
+                }
+                if si + 1 < n_seg {
+                    items.push(FlowItem::Embed(embed_idx));
+                    embed_idx += 1;
                 }
             }
-            _ => {}
-        }
-    }
-
-    text::paint(cr, &layout, ox, oy, &style);
+            items
+        })
+        .collect()
 }
 
-/// The `width` attribute of an embed, in logical px (default 160).
-fn embed_width(attrs: &[(String, String)]) -> f64 {
-    attrs
-        .iter()
-        .find(|(k, _)| k == "width")
-        .and_then(|(_, v)| v.parse().ok())
-        .unwrap_or(160.0)
+/// A laid-out text run on a flow line, with the ink metrics needed to vertically
+/// center it and to size adjacent inline symbols to the glyph ink.
+struct Run {
+    layout: pango::Layout,
+    /// Advance width (px).
+    width: f64,
+    /// Inked top, relative to the layout's top (px).
+    ink_top: f64,
+    /// Inked height (px) — for a digit run, ≈ its cap height.
+    ink_h: f64,
 }
 
-/// Compose a single line of text segments interleaved with inline embeds,
-/// left-to-right: each text run is laid out and advanced past, and each embed
-/// (e.g. a ticker) is drawn into a `width`-wide box in the gap.
-fn draw_inline(
+/// Compose text + inline embeds across one or more lines (see [`flow_layout`]).
+/// Each run is vertically centered by its **ink box** on the line's mid-line (so
+/// a big number and smaller text sit centered together, not baseline-locked), and
+/// each inline symbol is sized to the ink box of its neighbouring text run and
+/// centered on the same mid-line — so a dot/`?`/cells line up with the digit
+/// beside them. Lines are stacked and the block vertically centered.
+fn draw_flow(
     cr: &gtk::cairo::Context,
     processed: &markup::Processed,
-    _w: f64,
     h: f64,
     config: &Config,
     style: &text::TextStyle,
     time: f32,
+    scale: f64,
 ) {
-    // markup splits into N+1 text segments around N embed placeholders.
-    let segments: Vec<&str> = processed.markup.split(markup::EMBED_PLACEHOLDER).collect();
     let line_h = config.font_size as f64 * 1.4;
-    let ry = ((h - line_h) / 2.0).max(0.0);
-    let mut x = h * 0.12; // left pad, matching text::layout
+    let pad = config.font_size as f64 * 0.5; // left pad, width-agnostic
+    let lines = flow_layout(&processed.markup);
+    let block_h = line_h * lines.len() as f64;
+    let oy0 = ((h - block_h) / 2.0).max(0.0);
 
-    for (i, seg) in segments.iter().enumerate() {
-        if !seg.is_empty() {
-            let (layout, oy, sw) = text::layout_line(cr, seg, h, style);
-            text::paint(cr, &layout, x, oy, style);
-            x += sw;
-        }
-        if let Some(embed) = processed.embeds.get(i) {
-            let ew = embed_width(&embed.attrs);
-            if embed.tag == "tickerbox" {
-                draw_ticker(cr, &embed.inner, (x, ry, ew, line_h), config, time);
+    for (li, items) in lines.iter().enumerate() {
+        let ly = oy0 + li as f64 * line_h;
+        let center_y = ly + line_h / 2.0; // the line's vertical mid-line
+
+        // First pass: lay out each text run, capturing its ink box.
+        let mut laid: Vec<Option<Run>> = Vec::with_capacity(items.len());
+        for item in items {
+            match *item {
+                FlowItem::Text(seg) => {
+                    let (layout, _oy, width) = text::layout_line(cr, seg, line_h, style);
+                    // True rendered ink (font-robust, incl. bitmap fonts), cached.
+                    let (ink_top, ink_h) =
+                        run_ink(seg, &style.font_family, config.font_size as f64);
+                    laid.push(Some(Run {
+                        layout,
+                        width,
+                        ink_top,
+                        ink_h,
+                    }));
+                }
+                FlowItem::Embed(_) => laid.push(None),
             }
-            x += ew;
+        }
+
+        // Second pass: center each run's ink box on the mid-line; size each symbol
+        // to the nearest preceding text run's ink (its neighbour digit), centered
+        // on the same mid-line.
+        let mut x = pad;
+        for (ii, item) in items.iter().enumerate() {
+            match *item {
+                FlowItem::Text(_) => {
+                    if let Some(run) = &laid[ii] {
+                        let y = center_y - run.ink_top - run.ink_h / 2.0;
+                        text::paint(cr, &run.layout, x, y, style);
+                        x += run.width;
+                    }
+                }
+                FlowItem::Embed(idx) => {
+                    let Some(embed) = processed.embeds.get(idx) else {
+                        continue;
+                    };
+                    // Symbols size to the nearest preceding *inked* text run (its
+                    // neighbour digit) so they read as a peer; if there's none
+                    // (e.g. adjacent icons separated by spaces), fall back to the
+                    // line's tallest run, then to a font-based cap.
+                    let cap_h = laid[..ii]
+                        .iter()
+                        .rev()
+                        .flatten()
+                        .map(|r| r.ink_h)
+                        .find(|&h| h >= 1.0)
+                        .or_else(|| {
+                            laid.iter()
+                                .flatten()
+                                .map(|r| r.ink_h)
+                                .fold(0.0_f64, f64::max)
+                                .into()
+                        })
+                        .filter(|&h| h >= 1.0)
+                        .unwrap_or(line_h * 0.62);
+                    match embed.tag.as_str() {
+                        "status" => {
+                            let ew = embed_width(&embed.attrs, cap_h * 1.7);
+                            draw_status(
+                                cr,
+                                &embed.attrs,
+                                x + ew / 2.0,
+                                center_y,
+                                cap_h,
+                                &style.font_family,
+                                time,
+                            );
+                            x += ew;
+                        }
+                        "icon" => {
+                            let ew = embed_width(&embed.attrs, cap_h * 1.4);
+                            draw_icon(cr, &embed.attrs, x + ew / 2.0, center_y, cap_h, scale);
+                            x += ew;
+                        }
+                        "tickerbox" => {
+                            let ew = embed_width(&embed.attrs, 160.0);
+                            draw_ticker(cr, &embed.inner, (x, ly, ew, line_h), config, time);
+                            x += ew;
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 }
 
-/// Logical pixels/second the ticker scrolls (brisk, for fast readers).
-const TICKER_SPEED: f64 = 120.0;
+/// Value of attribute `key`, if present.
+fn attr<'a>(attrs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    attrs
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
 
-/// Render `inner` markup as a single line scrolling right-to-left within the
-/// embed `rect`, clipped and looping, with a `◆` marker between repetitions so
-/// the loop seam is visible. `time` is seconds since start.
+/// Whole-tile `<pulse>` oscillation period, in seconds (the prompt attention blink).
+const PULSE_PERIOD: f64 = 1.3;
+
+/// Blink/pulse multiplier in `[lo, 1.0]`, a sine oscillating with `period` secs.
+fn osc(time: f32, period: f64, lo: f64) -> f64 {
+    let phase = (time as f64 / period) * std::f64::consts::TAU;
+    let s = 0.5 + 0.5 * phase.sin(); // 0..1
+    lo + (1.0 - lo) * s
+}
+
+/// Per-level idle colour: a fade from bright white (just-idled) to dim grey
+/// (long idle), matching the daemon's 7-step decay.
+const IDLE_LEVELS: [&str; 7] = [
+    "#ffffff", "#d8d8d8", "#b0b0b0", "#888888", "#686868", "#505050", "#3a3a3a",
+];
+
+/// Set the Cairo source to a hex colour, multiplying its alpha by `alpha_mul`.
+fn set_hex(cr: &gtk::cairo::Context, hex: &str, alpha_mul: f64) {
+    if let Some(c) = render::parse_hex_color(hex) {
+        cr.set_source_rgba(c.r as f64, c.g as f64, c.b as f64, c.a as f64 * alpha_mul);
+    }
+}
+
+/// Draw the claude-session indicator for `<status state=".." level="N"/>`, sized
+/// to the neighbouring digit (`cap_h` = the digit's ink height) and centered on
+/// the line mid-line `cy` at slot centre `cx`. States: blinking orange dot
+/// (`working`), pulsing cyan dot (`shell`), a bright `?` over a yellow bloom
+/// (`prompt`), or a static two-cell fade bar (`idle`).
+fn draw_status(
+    cr: &gtk::cairo::Context,
+    attrs: &[(String, String)],
+    cx: f64,
+    cy: f64,
+    cap_h: f64,
+    family: &str,
+    time: f32,
+) {
+    if cap_h < 1.0 {
+        return;
+    }
+    let state = attr(attrs, "state").unwrap_or("idle");
+    // A dot whose diameter equals the digit's rendered cap height — same height,
+    // top and bottom aligned with the number beside it.
+    let r = cap_h * 0.5;
+    match state {
+        // Slow, deep blink/pulse (wide amplitude) — a "bursting bubble", not a
+        // twitch: a moderate color-matched glow swells under the vivid dot, both
+        // riding the same oscillation. Electric hues, punchier than the daemon's.
+        "working" => {
+            let a = osc(time, 2.0, 0.15);
+            glow_halo(cr, cx, cy, cap_h * 0.95, "#ff5a14", a * 0.35);
+            fill_circle(cr, cx, cy, r, "#ff5a14", a);
+        }
+        "shell" => {
+            let a = osc(time, 2.8, 0.25);
+            glow_halo(cr, cx, cy, cap_h * 0.95, "#12f5ff", a * 0.4);
+            fill_circle(cr, cx, cy, r, "#12f5ff", a);
+        }
+        // A bright `?` (drawn at the digit's scale, centered) over a visible
+        // yellow bloom. The blink comes from the whole-tile `<pulse>`.
+        "prompt" => {
+            glow_halo(cr, cx, cy, cap_h * 1.3, "#f9e2af", 0.85);
+            draw_glyph_centered(cr, "?", cx, cy, cap_h, family, "#f9e2af");
+        }
+        "idle" => {
+            let level = attr(attrs, "level")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0)
+                .min(IDLE_LEVELS.len() - 1);
+            draw_idle_cells(cr, cx, cy, cap_h, IDLE_LEVELS[level]);
+        }
+        _ => {}
+    }
+}
+
+/// Rasterized icon buffers keyed by (source, device px, tint) — an ARGB32 buffer
+/// (or `None` for a cached failure).
+type IconCache = HashMap<(String, u32, Option<u32>), Option<Vec<u8>>>;
+
+thread_local! {
+    /// Per-thread icon raster cache, so animated tiles don't re-rasterize an SVG
+    /// every frame.
+    static ICON_CACHE: RefCell<IconCache> = RefCell::new(HashMap::new());
+}
+
+/// Draw an `<icon name="…"/>` (bundled) or `<icon src="path.svg"/>` (file),
+/// sized to `cap_h` (the neighbour digit) and centered on `(cx, cy)`. An optional
+/// `color` attribute tints the SVG (a monochrome silhouette); without it, the
+/// artwork's own colours render (e.g. an app logo). Rasterized at device
+/// resolution and cached.
+fn draw_icon(
+    cr: &gtk::cairo::Context,
+    attrs: &[(String, String)],
+    cx: f64,
+    cy: f64,
+    cap_h: f64,
+    scale: f64,
+) {
+    if cap_h < 1.0 {
+        return;
+    }
+    let name = attr(attrs, "name");
+    let src = attr(attrs, "src");
+    let key = match (name, src) {
+        (Some(n), _) => format!("name:{n}"),
+        (_, Some(s)) => format!("src:{s}"),
+        _ => return,
+    };
+    let tint = attr(attrs, "color")
+        .and_then(render::parse_hex_color)
+        .map(|c| (c.r, c.g, c.b));
+    let tint_key = tint.map(|(r, g, b)| {
+        ((r * 255.0) as u32) << 16 | ((g * 255.0) as u32) << 8 | (b * 255.0) as u32
+    });
+    let px = ((cap_h * scale).round() as u32).max(1);
+
+    let buf = ICON_CACHE.with(|c| {
+        c.borrow_mut()
+            .entry((key, px, tint_key))
+            .or_insert_with(|| {
+                let bytes: Option<Vec<u8>> = match (name, src) {
+                    (Some(n), _) => svg::bundled(n).map(|s| s.as_bytes().to_vec()),
+                    (_, Some(s)) => std::fs::read(s).ok(),
+                    _ => None,
+                };
+                bytes.and_then(|b| svg::rasterize_argb32(&b, px, tint))
+            })
+            .clone()
+    });
+    if let Some(buf) = buf {
+        paint_argb32_at(
+            cr,
+            px as usize,
+            px as usize,
+            buf,
+            scale,
+            cx - cap_h / 2.0,
+            cy - cap_h / 2.0,
+        );
+    }
+}
+
+/// Composite an already-ARGB32 (premultiplied, BGRA byte order) buffer at logical
+/// `(ox, oy)`, scaling device pixels back to logical. Like [`paint_rgba_at`] but
+/// for data that's already in Cairo's format (e.g. SVG raster, tiny-skia).
+fn paint_argb32_at(
+    cr: &gtk::cairo::Context,
+    w: usize,
+    h: usize,
+    data: Vec<u8>,
+    device_scale: f64,
+    ox: f64,
+    oy: f64,
+) {
+    use gtk::cairo::{Format, ImageSurface};
+    let stride = 4 * w as i32;
+    let surface =
+        match ImageSurface::create_for_data(data, Format::ARgb32, w as i32, h as i32, stride) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+    let _ = cr.save();
+    cr.translate(ox, oy);
+    let s = 1.0 / device_scale;
+    cr.scale(s, s);
+    if cr.set_source_surface(&surface, 0.0, 0.0).is_ok() {
+        let _ = cr.paint();
+    }
+    let _ = cr.restore();
+}
+
+/// Fill a circle of `hex` colour at `(cx, cy)` with the given alpha multiplier.
+fn fill_circle(cr: &gtk::cairo::Context, cx: f64, cy: f64, r: f64, hex: &str, alpha: f64) {
+    set_hex(cr, hex, alpha);
+    cr.arc(cx, cy, r, 0.0, std::f64::consts::TAU);
+    let _ = cr.fill();
+}
+
+/// Paint a soft radial bloom of `hex` (peak `alpha` at the centre, fading to 0 at
+/// `radius`) centred at `(cx, cy)` — a CPU glow that can bleed past its slot.
+fn glow_halo(cr: &gtk::cairo::Context, cx: f64, cy: f64, radius: f64, hex: &str, alpha: f64) {
+    let Some(c) = render::parse_hex_color(hex) else {
+        return;
+    };
+    let (r, g, b) = (c.r as f64, c.g as f64, c.b as f64);
+    let grad = gtk::cairo::RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
+    grad.add_color_stop_rgba(0.0, r, g, b, alpha);
+    grad.add_color_stop_rgba(0.45, r, g, b, alpha * 0.45);
+    grad.add_color_stop_rgba(1.0, r, g, b, 0.0);
+    if cr.set_source(&grad).is_ok() {
+        cr.arc(cx, cy, radius, 0.0, std::f64::consts::TAU);
+        let _ = cr.fill();
+    }
+}
+
+/// Draw a bold `glyph` (e.g. `?`) sized so its ink height ≈ `cap_h`, with its ink
+/// box centered on `(cx, cy)` — so it aligns like an adjacent centered digit.
+fn draw_glyph_centered(
+    cr: &gtk::cairo::Context,
+    glyph: &str,
+    cx: f64,
+    cy: f64,
+    cap_h: f64,
+    family: &str,
+    hex: &str,
+) {
+    let c = render::parse_hex_color(hex).unwrap_or(femtovg_white());
+    let style = text::TextStyle {
+        font_family: family.to_string(),
+        size_px: cap_h / 0.70, // ? cap ≈ 0.7·em, so this gives ink height ≈ cap_h
+        color: (c.r as f64, c.g as f64, c.b as f64, 1.0),
+        align_center: false,
+    };
+    let (layout, _oy, lw) = text::layout_line(cr, &format!("<b>{glyph}</b>"), cap_h * 2.0, &style);
+    let ink = layout.pixel_extents().0;
+    let y = cy - ink.y() as f64 - ink.height() as f64 / 2.0;
+    text::paint(cr, &layout, cx - lw / 2.0, y, &style);
+}
+
+/// Draw the idle indicator: two rounded cells of height `cap_h` in `hex` (the
+/// level colour), centered at `(cx, cap_cy)` — evoking the `██`/`░░` decay bar,
+/// sized to the digit beside it.
+fn draw_idle_cells(cr: &gtk::cairo::Context, cx: f64, cap_cy: f64, cap_h: f64, hex: &str) {
+    let cw = cap_h * 0.42;
+    let gap = cap_h * 0.24;
+    let total = cw * 2.0 + gap;
+    let x0 = cx - total / 2.0;
+    let y0 = cap_cy - cap_h / 2.0;
+    set_hex(cr, hex, 1.0);
+    rounded_rect(cr, x0, y0, cw, cap_h, cw * 0.3);
+    let _ = cr.fill();
+    rounded_rect(cr, x0 + cw + gap, y0, cw, cap_h, cw * 0.3);
+    let _ = cr.fill();
+}
+
+/// Opaque white femtovg colour (fallback for an unparsable hex).
+fn femtovg_white() -> femtovg::Color {
+    femtovg::Color::rgb(255, 255, 255)
+}
+
+/// Logical pixels/second the ticker scrolls (brisk but comfortable to read).
+const TICKER_SPEED: f64 = 70.0;
+
+/// Render `inner` markup within the embed `rect`. If it fits, draw it statically
+/// (no scroll). If it's wider than the box, scroll it right-to-left with a `◆`
+/// marker, clipped, looping — but with a clearing gap so the box goes fully
+/// blank for a beat before the next pass enters (less nauseating than a seamless
+/// loop). `time` is seconds since start.
 fn draw_ticker(
     cr: &gtk::cairo::Context,
     inner: &str,
@@ -413,27 +893,35 @@ fn draw_ticker(
         return;
     }
     let style = text::TextStyle {
-        font_family: "sans".into(),
+        font_family: font_family(config),
         size_px: config.font_size as f64,
         color: (0.95, 0.95, 1.0, 1.0),
         align_center: false,
     };
-    // Loop unit = the text plus a marker, repeated; its width is the loop period.
-    let unit = format!("{inner}   <span foreground=\"#89b4fa\">\u{25c6}</span>   ");
-    let (layout, oy, lw) = text::layout_line(cr, &unit, rh, &style);
-    if lw < 1.0 {
-        return;
-    }
 
     let _ = cr.save();
     cr.rectangle(rx, ry, rw, rh);
     cr.clip();
-    // Scroll left; tile copies of the loop unit to cover the box seamlessly.
-    let offset = (time as f64 * TICKER_SPEED).rem_euclid(lw);
+
+    // Measure the bare text. If it fits the box, no need to scroll — render it
+    // statically so short titles don't pointlessly loop.
+    let (text_layout, toy, tw) = text::layout_line(cr, inner, rh, &style);
+    if tw <= rw {
+        text::paint(cr, &text_layout, rx, ry + toy, &style);
+        let _ = cr.restore();
+        return;
+    }
+
+    // Too wide: scroll. Loop unit = text + a `◆` marker; the loop period adds a
+    // clearing gap of ~1.25× the box width so the box empties between passes.
+    let unit = format!("{inner}   <span foreground=\"#89b4fa\">\u{25c6}</span>");
+    let (layout, oy, uw) = text::layout_line(cr, &unit, rh, &style);
+    let period = uw + rw * 1.25;
+    let offset = (time as f64 * TICKER_SPEED).rem_euclid(period);
     let mut x = rx - offset;
     while x < rx + rw {
         text::paint(cr, &layout, x, ry + oy, &style);
-        x += lw;
+        x += period;
     }
     let _ = cr.restore();
 }
@@ -516,3 +1004,91 @@ fn glib_propagation_proceed() -> gtk::glib::Propagation {
 }
 
 waybar_module!(PwettyBox);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const P: char = markup::EMBED_PLACEHOLDER;
+
+    #[test]
+    fn flow_layout_single_line_with_embed() {
+        let m = format!("a{P}b");
+        assert_eq!(
+            flow_layout(&m),
+            vec![vec![
+                FlowItem::Text("a"),
+                FlowItem::Embed(0),
+                FlowItem::Text("b")
+            ]]
+        );
+    }
+
+    #[test]
+    fn flow_layout_multiline_indexes_embeds_in_document_order() {
+        // line 0 has one embed; line 1 has two adjacent embeds then text.
+        let m = format!("x{P}y\nz{P}{P}w");
+        assert_eq!(
+            flow_layout(&m),
+            vec![
+                vec![FlowItem::Text("x"), FlowItem::Embed(0), FlowItem::Text("y")],
+                vec![
+                    FlowItem::Text("z"),
+                    FlowItem::Embed(1),
+                    FlowItem::Embed(2),
+                    FlowItem::Text("w"),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn flow_layout_leading_and_trailing_placeholders_emit_no_empty_text() {
+        let m = format!("{P}mid{P}");
+        assert_eq!(
+            flow_layout(&m),
+            vec![vec![
+                FlowItem::Embed(0),
+                FlowItem::Text("mid"),
+                FlowItem::Embed(1)
+            ]]
+        );
+    }
+
+    #[test]
+    fn flow_layout_plain_multiline_has_no_embeds() {
+        assert_eq!(
+            flow_layout("one\ntwo"),
+            vec![vec![FlowItem::Text("one")], vec![FlowItem::Text("two")]]
+        );
+    }
+
+    #[test]
+    fn attr_finds_value_or_none() {
+        let a = vec![("state".to_string(), "working".to_string())];
+        assert_eq!(attr(&a, "state"), Some("working"));
+        assert_eq!(attr(&a, "level"), None);
+    }
+
+    #[test]
+    fn embed_width_uses_attr_or_default() {
+        let none: Vec<(String, String)> = vec![];
+        assert_eq!(embed_width(&none, 160.0), 160.0);
+        let w = vec![("width".to_string(), "80".to_string())];
+        assert_eq!(embed_width(&w, 160.0), 80.0);
+    }
+
+    #[test]
+    fn osc_stays_within_range() {
+        for &t in &[0.0_f32, 0.25, 0.5, 0.9, 1.7, 3.3] {
+            let v = osc(t, 1.1, 0.18);
+            assert!((0.18..=1.0).contains(&v), "osc out of range: {v}");
+        }
+    }
+
+    #[test]
+    fn idle_levels_cover_seven_steps() {
+        assert_eq!(IDLE_LEVELS.len(), 7);
+        assert_eq!(IDLE_LEVELS[0], "#ffffff");
+        assert_eq!(IDLE_LEVELS[6], "#3a3a3a");
+    }
+}

@@ -37,11 +37,21 @@ minijinja = "2"
 # Raw GL for tile-level background shaders (Shadertoy-style fragment shaders
 # rendered to an offscreen texture). Same glow version femtovg uses.
 glow = "0.17"
+# Pure-Rust SVG rasterizer (usvg + tiny-skia) for bundled/path icons — composited
+# onto Cairo through the same RGBA-buffer path as femtovg/shaders. No C deps.
+resvg = "0.45"
+# Enables cairo's `png` feature (write_to_png) for `render_png` — used by the
+# `pwetty` CLI's render subcommand and the offscreen vision examples. Same
+# cairo-rs (0.18) re-exported via `waybar_cffi::gtk`, so the feature unifies.
+cairo-rs = { version = "0.18", features = ["png"] }
+
+# `pwetty` introspection CLI (list / schema / check / render). Links the rlib.
+[[bin]]
+name = "pwetty"
+path = "src/bin/pwetty.rs"
 
 [dev-dependencies]
 image = "0.25"
-# Enables cairo's `png` feature for the offscreen vision examples (write_to_png).
-cairo-rs = { version = "0.18", features = ["png"] }
 
 [profile.release]
 opt-level = 3

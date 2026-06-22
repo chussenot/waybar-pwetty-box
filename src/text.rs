@@ -92,6 +92,61 @@ pub fn layout_line(
     (layout, oy, lw as f64)
 }
 
+/// The **truly-rendered** vertical ink extent of `markup` at `size_px` in
+/// `family`, as `(top, height)` in px relative to the layout's top — found by
+/// rasterizing the run to a scratch surface and scanning its alpha. Unlike
+/// `Layout::pixel_extents`, this reflects what's actually drawn, which matters
+/// for **bitmap fonts** (e.g. Terminus) where Pango's reported extents follow
+/// the requested size, not the snapped/scaled bitmap. Used to size inline
+/// symbols to the digit beside them. Returns `None` if nothing inked.
+pub fn ink_extent(markup: &str, family: &str, size_px: f64) -> Option<(f64, f64)> {
+    use cairo::{Context, Format, ImageSurface};
+
+    let desc = |layout: &pango::Layout| {
+        let mut d = pango::FontDescription::new();
+        d.set_family(family);
+        d.set_absolute_size(size_px * pango::SCALE as f64);
+        layout.set_font_description(Some(&d));
+        layout.set_width(-1);
+    };
+
+    // Measure the layout box first, then rasterize at exactly that size.
+    let tmp = ImageSurface::create(Format::ARgb32, 1, 1).ok()?;
+    let cr0 = Context::new(&tmp).ok()?;
+    let probe = pangocairo::functions::create_layout(&cr0);
+    probe.set_markup(markup);
+    desc(&probe);
+    let (lw, lh) = probe.pixel_size();
+    let (lw, lh) = (lw.max(1), lh.max(1));
+    drop(cr0);
+
+    let mut surface = ImageSurface::create(Format::ARgb32, lw, lh).ok()?;
+    {
+        let cr = Context::new(&surface).ok()?;
+        let layout = pangocairo::functions::create_layout(&cr);
+        layout.set_markup(markup);
+        desc(&layout);
+        cr.set_source_rgb(1.0, 1.0, 1.0);
+        cr.move_to(0.0, 0.0);
+        pangocairo::functions::show_layout(&cr, &layout);
+    }
+    surface.flush();
+    let stride = surface.stride() as usize;
+    let w = lw as usize;
+    let h = lh as usize;
+    let data = surface.data().ok()?;
+    let (mut top, mut bot) = (None, 0usize);
+    for y in 0..h {
+        let row = &data[y * stride..y * stride + w * 4];
+        if row.chunks_exact(4).any(|p| p[3] > 16) {
+            top.get_or_insert(y);
+            bot = y;
+        }
+    }
+    let top = top?;
+    Some((top as f64, (bot - top + 1) as f64))
+}
+
 /// Pixel rect of plain-text byte range `[start, end)` within `layout` painted at
 /// origin `(ox, oy)`.
 ///

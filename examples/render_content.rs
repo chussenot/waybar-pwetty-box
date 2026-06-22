@@ -6,15 +6,19 @@
 //!
 //! Default markup exercises spans (color/size/weight), multiline, and a `<box>`.
 
-use std::fs::File;
-
 use pwetty_box::config::Config;
-use waybar_cffi::gtk::cairo::{Context, Format, ImageSurface};
-
-const W: i32 = 760;
-const H: i32 = 150;
 
 fn main() {
+    // Tile size: defaults to a roomy 760×150, overridable via env so the same
+    // harness can vision-check real tile dimensions (e.g. 300×50).
+    let w: i32 = std::env::var("PWETTY_W")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(760);
+    let h: i32 = std::env::var("PWETTY_H")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(150);
     let out = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "/tmp/claude-1000/content-sample.png".into());
@@ -44,48 +48,16 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.5);
 
-    let surface = ImageSurface::create(Format::ARgb32, W, H).expect("surface");
-    let cr = Context::new(&surface).expect("cairo context");
-
-    // A translucent dark backing, like a bar.
-    cr.set_source_rgba(
-        0x1e as f64 / 255.0,
-        0x1e as f64 / 255.0,
-        0x2e as f64 / 255.0,
-        0.85,
-    );
-    let _ = cr.paint();
-
     let config = Config {
+        width: w,
+        height: h,
         font_size,
+        font_family: std::env::var("PWETTY_FONT").ok(),
         ..Config::default()
     };
 
-    // GL context for span shaders (e.g. <glow>).
-    let gl = pwetty_box::offscreen::OffscreenGl::new().expect("surfaceless EGL");
-    gl.make_current().expect("make current");
-
-    // Faithful to the live content-tile path: render the femtovg background layer
-    // first (it dirties GL state), THEN the content + span effects — so this
-    // offscreen render exercises the same multi-renderer sequence as the live
-    // widget, which is where GL-state bugs (like the glow glitch) surface.
-    if let Ok(mut renderer) = pwetty_box::render::Renderer::new(&config, true) {
-        if let Ok((rw, rh, rgba)) = renderer.capture(W as u32, H as u32, 1.0, time) {
-            pwetty_box::composite_rgba(&cr, rw, rh, rgba, 1.0);
-        }
-    }
-
-    let mut cache = pwetty_box::shader::ShaderCache::new();
-    let mut fx = pwetty_box::EffectCtx {
-        shaders: &mut cache,
-        time,
-        frame: 0,
-        scale: 1.0,
-    };
-    pwetty_box::draw_content(&cr, &markup, W as f64, H as f64, &config, Some(&mut fx));
-
-    drop(cr);
-    let mut f = File::create(&out).expect("create png");
-    surface.write_to_png(&mut f).expect("write png");
-    eprintln!("wrote {out} ({W}x{H})");
+    // Render via the shared offscreen compose path used by the live widget and
+    // the `pwetty` CLI (femtovg background + Cairo content on a dark backing).
+    pwetty_box::render_png(&config, &markup, time, std::path::Path::new(&out)).expect("render");
+    eprintln!("wrote {out} ({w}x{h})");
 }

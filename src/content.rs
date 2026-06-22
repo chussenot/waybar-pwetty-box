@@ -132,6 +132,14 @@ fn build_markup(template: &str, icon: &Option<String>, data: &Value, base_px: f6
     }
 }
 
+/// Render a tile's markup for `config` against arbitrary `data` — the same
+/// template + icon composition the live content path uses, but one-shot. Used by
+/// the `pwetty` CLI to render a tile against a sample payload.
+pub fn markup_for(config: &Config, data: &Value) -> String {
+    let template = config.format.as_deref().unwrap_or("{{ value }}");
+    build_markup(template, &config.icon, data, config.font_size as f64)
+}
+
 /// Build a [`ContentStore`] for the configured source, if any (`text`/`exec`).
 /// For `exec`, spawns a background refresh thread. Returns `None` when no content
 /// source is configured (the caller falls back to the demo tile).

@@ -50,7 +50,14 @@ pub struct Processed {
     pub effects: Vec<EffectSpan>,
     /// Inline embeds (sized elements placed in the text flow).
     pub embeds: Vec<Embed>,
+    /// Whether the content was wrapped in `<pulse>…</pulse>` — the whole tile's
+    /// opacity should oscillate (an attention signal). The wrapper itself emits
+    /// no markup; its children render normally.
+    pub pulse: bool,
 }
+
+/// Structural tag that flags the whole tile to pulse (see [`Processed::pulse`]).
+pub const PULSE_TAG: &str = "pulse";
 
 /// Escape for safe insertion into Pango markup — text *and* attribute values
 /// (hence quotes too).
@@ -170,7 +177,12 @@ fn walk_children(
             out.plain.push_str(text);
         } else if child.is_element() {
             let tag = child.tag_name().name();
-            if embed_tags.contains(&tag) {
+            if tag == PULSE_TAG {
+                // Attention wrapper: flag the tile to pulse; emit no tag of its
+                // own — its children render normally.
+                out.pulse = true;
+                walk_children(child, effect_tags, embed_tags, out);
+            } else if embed_tags.contains(&tag) {
                 // Inline embed: one placeholder char in the flow; inner pulled out.
                 let start = out.plain.len();
                 out.markup.push(EMBED_PLACEHOLDER);

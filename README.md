@@ -109,10 +109,20 @@ glow a value only when it's critical).
 ### Inline embeds & the ticker
 
 Some elements are **placed inline** in the text flow rather than laid out as
-glyphs — they reserve a fixed-width box that surrounding text composes around.
-The first is `<tickerbox width="N">…</tickerbox>`, a **scrolling marquee** for
-content wider than its box: clipped to the box, scrolling briskly, looping with a
-`◆` marker at the loop seam.
+glyphs — they reserve a fixed-width box that surrounding text composes around,
+**across multiple lines** (`\n` in the template starts a new line). Two embeds
+ship today:
+
+- `<tickerbox width="N">…</tickerbox>` — a **scrolling marquee** for content
+  wider than its box: clipped, scrolling briskly, looping with a `◆` seam marker.
+  Renders static (no scroll) when the content fits.
+- `<status state="…" level="N"/>` — an **animated indicator** (a blinking/pulsing
+  dot, a `?`, or a fade bar). See the bundled `claude` tile below.
+- `<icon name="…"/>` / `<icon src="…"/>` — an **SVG icon** (see below).
+
+Inline symbols (status, icons) are sized to the **ink box of the digit/text
+beside them** and centered on the line, so they read as peers — no font-glyph
+baseline wrangling.
 
 ```jsonc
 "exec": "now-playing.sh",
@@ -121,9 +131,74 @@ content wider than its box: clipped to the box, scrolling briskly, looping with 
 
 → a bold label, a 300px scrolling ticker, and a value — composed on one line.
 Animation auto-enables; inner Pango markup is preserved. This inline-embed seam
-(`markup::Embed` → measured placement → draw into the box) is where future
-`<bar>`/`<ring>`/`<sparkline>` elements will live. (v1: embeds are top-level and a
-tile uses either embeds or `<box>`/`<glow>` effects, not both.)
+(`markup::Embed` → measured placement → draw into the box, laid out by
+`draw_flow`) is where future `<bar>`/`<ring>`/`<sparkline>` elements will live.
+(v1: a tile uses either inline embeds or `<box>`/`<glow>` span effects, not both.)
+
+### Icons (bundled SVGs)
+
+Icons are **SVG**, not font glyphs — rasterized with `resvg` (pure Rust) at the
+exact device resolution and composited onto the tile. That means crisp at any
+size/scale, and *unlimited* — no font can give you every app's logo.
+
+```jsonc
+"format": "<icon name='git' color='#a6e3a1'/> {{ branch }}"
+```
+
+- `<icon name="…"/>` — a **bundled** icon (ships inside the module).
+- `<icon src="/path/to.svg"/>` — any **external** SVG (e.g. a freedesktop app icon).
+- `color="#rrggbb"` (optional) — tint the SVG as a monochrome silhouette; omit it
+  to keep the artwork's own colours (e.g. a multi-colour app logo).
+
+Each icon is sized to the neighbouring digit/text and centered on the line.
+
+**Bundled set:**
+
+![bundled icons](docs/icons.png)
+
+`folder` · `check` · `arrow-up` · `bell` · `code` · `terminal` · `gear` · `app`
+
+(Add more by dropping `.svg` files in `icons/` and registering them in
+`src/svg.rs`, or just point `src=` at your own files.)
+
+### Bundled tiles & the data contract
+
+Whole tiles can ship **inside the module**: geometry, fonts, colours, and the
+`format` template, packaged as a named preset. A waybar module references one by
+name and supplies only the data — pwetty layers the preset underneath, and the
+module's own keys win:
+
+```jsonc
+"cffi/pwetty#claude5": {
+  "module_path": ".../libpwetty_box.so",
+  "tile": "claude",                 // bundled preset (geometry + template)
+  "interval": 2,
+  "exec": "claude-tile-data 5"      // your job: emit JSON matching the contract
+}
+```
+
+Override any preset field inline (`"width": 360`), or point at an external file
+to iterate without rebuilding (`"tile_file": "/path/tile.json"`).
+
+The bundled **`claude`** tile renders a niri desktop running a Claude session:
+shortcut number, an animated session-status indicator (`working`→blinking orange
+dot, `prompt`→blinking `?`, `shell`→pulsing cyan dot, `idle`→a fade bar that dims
+with `idle_level`), the folder name, an `↑N` unpushed-commits badge, and a
+scrolling window-title marquee.
+
+The data source is **decoupled**: a tile declares the JSON it wants via a
+JSON Schema, and the `pwetty` CLI surfaces that contract so a separate
+data-gathering layer knows exactly what to emit:
+
+```bash
+pwetty list                  # bundled tiles + their samples
+pwetty schema claude         # the tile's JSON Schema (the data contract)
+pwetty check claude          # validate template ↔ schema ↔ bundled samples
+pwetty render claude --all-states -o /tmp/out   # PNG per sample (needs surfaceless EGL)
+```
+
+See `tiles/claude/` for the preset, schema, mocked samples, and a fuller
+binding-contract doc.
 
 ### Background shaders (GPU)
 
