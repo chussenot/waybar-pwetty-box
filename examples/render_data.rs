@@ -52,7 +52,7 @@ fn main() {
         font_size,
         ..Config::default()
     };
-    pwetty_box::draw_content(&cr, &markup, W as f64, H as f64, &config);
+    pwetty_box::draw_content(&cr, &markup, W as f64, H as f64, &config, None);
 
     drop(cr);
     let mut f = File::create(&out).expect("create png");

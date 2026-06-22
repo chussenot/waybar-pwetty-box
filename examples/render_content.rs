@@ -54,7 +54,18 @@ fn main() {
         font_size,
         ..Config::default()
     };
-    pwetty_box::draw_content(&cr, &markup, W as f64, H as f64, &config);
+
+    // A GL context + shader cache so span shaders (e.g. <glow>) render here too.
+    let gl = pwetty_box::offscreen::OffscreenGl::new().expect("surfaceless EGL");
+    gl.make_current().expect("make current");
+    let mut cache = pwetty_box::shader::ShaderCache::new();
+    let mut fx = pwetty_box::EffectCtx {
+        shaders: &mut cache,
+        time: 1.0,
+        frame: 0,
+        scale: 1.0,
+    };
+    pwetty_box::draw_content(&cr, &markup, W as f64, H as f64, &config, Some(&mut fx));
 
     drop(cr);
     let mut f = File::create(&out).expect("create png");

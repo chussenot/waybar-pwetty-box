@@ -43,6 +43,8 @@ struct Engine {
     shader_path: Option<String>,
     shader: Option<shader::ShaderPass>,
     shader_mtime: Option<SystemTime>,
+    /// Compiled shaders for span-level effects (e.g. `<glow>`), keyed by source.
+    span_shaders: shader::ShaderCache,
     frame: i32,
 }
 
@@ -112,6 +114,7 @@ impl Module for PwettyBox {
                     shader_path: config.background_shader.clone(),
                     shader: None,
                     shader_mtime: None,
+                    span_shaders: shader::ShaderCache::new(),
                     frame: 0,
                 }),
                 Err(e) => {
@@ -141,22 +144,23 @@ impl Module for PwettyBox {
                     .map(|s| s.uniforms())
                     .unwrap_or_default();
 
-                // Layer 1: the GPU background, composited via Cairo. It's either a
-                // tile-level shader (when `background_shader` is set) or the
-                // femtovg layer (the demo tile / background colour).
                 if let Some(engine) = shared.engine.borrow_mut().as_mut() {
-                    let w = (area.allocated_width().max(1) * scale) as u32;
-                    let h = (area.allocated_height().max(1) * scale) as u32;
                     if engine.gl.make_current().is_ok() {
+                        let wd = (area.allocated_width().max(1) * scale) as u32;
+                        let hd = (area.allocated_height().max(1) * scale) as u32;
                         let time = engine.start.elapsed().as_secs_f32();
-                        engine.refresh_shader();
                         let frame = engine.frame;
+
+                        // Layer 1: GPU background — a tile-level shader (when
+                        // `background_shader` is set) or the femtovg layer
+                        // (demo tile / background colour) — composited via Cairo.
+                        engine.refresh_shader();
                         let bg: Option<Vec<u8>> = if let Some(sh) = engine.shader.as_mut() {
-                            Some(sh.render(w as i32, h as i32, time, frame, &shader_uniforms))
+                            Some(sh.render(wd as i32, hd as i32, time, frame, &shader_uniforms))
                         } else if engine.shader_path.is_none() {
                             engine
                                 .renderer
-                                .capture(w, h, scale as f32, time)
+                                .capture(wd, hd, scale as f32, time)
                                 .ok()
                                 .map(|(_, _, rgba)| rgba)
                         } else {
@@ -166,18 +170,30 @@ impl Module for PwettyBox {
                             engine.frame = engine.frame.wrapping_add(1);
                         }
                         if let Some(rgba) = bg {
-                            paint_rgba(cr, w as usize, h as usize, rgba, scale as f64);
+                            paint_rgba(cr, wd as usize, hd as usize, rgba, scale as f64);
+                        }
+
+                        // Layer 2: Pango text + span effects, in logical coords.
+                        // Span shaders (e.g. <glow>) render via the GL cache.
+                        if let Some(store) = &content_draw {
+                            let wl = area.allocated_width().max(1) as f64;
+                            let hl = area.allocated_height().max(1) as f64;
+                            let mut fx = EffectCtx {
+                                shaders: &mut engine.span_shaders,
+                                time,
+                                frame,
+                                scale: scale as f64,
+                            };
+                            draw_content(
+                                cr,
+                                &store.markup(),
+                                wl,
+                                hl,
+                                &shared.config,
+                                Some(&mut fx),
+                            );
                         }
                     }
-                }
-
-                // Layer 2: the Pango text layer, drawn in logical coordinates
-                // (GTK rasterizes the Cairo context at device resolution, so the
-                // text stays crisp). Per-pixel alpha composites over layer 1.
-                if let Some(store) = &content_draw {
-                    let w = area.allocated_width().max(1) as f64;
-                    let h = area.allocated_height().max(1) as f64;
-                    draw_content(cr, &store.markup(), w, h, &shared.config);
                 }
 
                 glib_propagation_proceed()
@@ -215,7 +231,21 @@ impl Module for PwettyBox {
 /// widget's Cairo context, honoring per-pixel alpha against whatever is behind
 /// (e.g. a translucent bar). `device_scale` maps the device pixels we rendered at
 /// back to the widget's logical coordinate space.
-fn paint_rgba(cr: &gtk::cairo::Context, w: usize, h: usize, mut rgba: Vec<u8>, device_scale: f64) {
+fn paint_rgba(cr: &gtk::cairo::Context, w: usize, h: usize, rgba: Vec<u8>, device_scale: f64) {
+    paint_rgba_at(cr, w, h, rgba, device_scale, 0.0, 0.0);
+}
+
+/// As [`paint_rgba`], but places the image's top-left at logical `(ox, oy)` —
+/// used to composite a span effect (e.g. a glow) at its position.
+fn paint_rgba_at(
+    cr: &gtk::cairo::Context,
+    w: usize,
+    h: usize,
+    mut rgba: Vec<u8>,
+    device_scale: f64,
+    ox: f64,
+    oy: f64,
+) {
     use gtk::cairo::{Format, ImageSurface};
 
     // femtovg gives straight-alpha RGBA; Cairo ARGB32 wants premultiplied, in
@@ -238,9 +268,10 @@ fn paint_rgba(cr: &gtk::cairo::Context, w: usize, h: usize, mut rgba: Vec<u8>, d
             Err(_) => return,
         };
 
-    // We rendered at device resolution; scale back so it fills the logical area.
-    // save/restore so this transform doesn't leak into the text layer.
+    // We rendered at device resolution; place at the logical offset and scale
+    // back. save/restore so this transform doesn't leak into the text layer.
     let _ = cr.save();
+    cr.translate(ox, oy);
     let s = 1.0 / device_scale;
     cr.scale(s, s);
     if cr.set_source_surface(&surface, 0.0, 0.0).is_ok() {
@@ -250,10 +281,19 @@ fn paint_rgba(cr: &gtk::cairo::Context, w: usize, h: usize, mut rgba: Vec<u8>, d
 }
 
 /// Custom effect tags routed away from Pango (see [`markup`]).
-const EFFECT_TAGS: &[&str] = &["box"];
+const EFFECT_TAGS: &[&str] = &["box", "glow"];
+
+/// GPU resources + timing a span effect needs (currently `<glow>`). Without it
+/// (e.g. a CPU-only caller), GPU span effects are skipped; `<box>` still draws.
+pub struct EffectCtx<'a> {
+    pub shaders: &'a mut shader::ShaderCache,
+    pub time: f32,
+    pub frame: i32,
+    pub scale: f64,
+}
 
 /// Draw the content's Pango markup onto `cr` within a `w`×`h` logical tile,
-/// rendering any custom effect tags (currently `<box>`) behind the text.
+/// rendering custom effect tags (`<box>`, `<glow>`) behind the text.
 /// Public so offscreen vision harnesses can exercise the exact compose path.
 pub fn draw_content(
     cr: &gtk::cairo::Context,
@@ -261,6 +301,7 @@ pub fn draw_content(
     w: f64,
     h: f64,
     config: &Config,
+    mut fx: Option<&mut EffectCtx>,
 ) {
     let processed = markup::process(content_markup, EFFECT_TAGS);
 
@@ -275,13 +316,61 @@ pub fn draw_content(
 
     // Effects render behind the text.
     for effect in &processed.effects {
-        if effect.tag == "box" {
-            let rect = text::span_rect(&layout, ox, oy, effect.start, effect.end);
-            draw_box(cr, rect, &effect.attrs);
+        let rect = text::span_rect(&layout, ox, oy, effect.start, effect.end);
+        match effect.tag.as_str() {
+            "box" => draw_box(cr, rect, &effect.attrs),
+            "glow" => {
+                if let Some(fx) = fx.as_deref_mut() {
+                    draw_glow(cr, rect, &effect.attrs, fx);
+                }
+            }
+            _ => {}
         }
     }
 
     text::paint(cr, &layout, ox, oy, &style);
+}
+
+/// Draw a `<glow color="#rrggbb">` soft halo behind a text span (built-in GPU
+/// shader rendered via the cache and composited behind the text).
+fn draw_glow(
+    cr: &gtk::cairo::Context,
+    rect: text::Rect,
+    attrs: &[(String, String)],
+    fx: &mut EffectCtx,
+) {
+    let (x, y, w, h) = rect;
+    let pad = h * 0.6;
+    let (gx, gy, gw, gh) = (x - pad, y - pad, w + 2.0 * pad, h + 2.0 * pad);
+
+    let (r, g, b) = attrs
+        .iter()
+        .find(|(k, _)| k == "color")
+        .and_then(|(_, v)| render::parse_hex_color(v))
+        .map(|c| (c.r, c.g, c.b))
+        .unwrap_or((0.40, 0.70, 1.0));
+
+    let dw = (gw * fx.scale).round() as i32;
+    let dh = (gh * fx.scale).round() as i32;
+    if dw <= 0 || dh <= 0 {
+        return;
+    }
+    let uniforms = [
+        ("u_r".to_string(), r),
+        ("u_g".to_string(), g),
+        ("u_b".to_string(), b),
+    ];
+    if let Some(rgba) = fx.shaders.render(
+        "builtin:glow",
+        shader::GLOW_SRC,
+        dw,
+        dh,
+        fx.time,
+        fx.frame,
+        &uniforms,
+    ) {
+        paint_rgba_at(cr, dw as usize, dh as usize, rgba, fx.scale, gx, gy);
+    }
 }
 
 /// Draw a `<box bg="#rrggbb[aa]">` rounded highlight behind a text span.

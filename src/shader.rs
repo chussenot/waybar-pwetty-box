@@ -4,7 +4,60 @@
 //!
 //! Requires a current GL context (the engine's [`crate::offscreen::OffscreenGl`]).
 
+use std::collections::HashMap;
+
 use glow::HasContext;
+
+/// Built-in soft-glow shader (used by the `<glow color="…">` span effect). A
+/// gently pulsing coloured blob with a soft elliptical falloff; the colour comes
+/// from the `u_r`/`u_g`/`u_b` uniforms.
+pub const GLOW_SRC: &str = "\
+uniform float u_r; uniform float u_g; uniform float u_b;\n\
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n\
+    vec2 p = (fragCoord / iResolution.xy - 0.5) * 2.0;\n\
+    float d = length(p * vec2(0.85, 1.0));\n\
+    float a = smoothstep(1.0, 0.05, d) * 0.6 * (0.85 + 0.15 * sin(iTime * 2.5));\n\
+    fragColor = vec4(u_r, u_g, u_b, clamp(a, 0.0, 1.0));\n\
+}\n";
+
+/// Compiles shaders on first use and caches them by key, so repeated frames (and
+/// repeated span effects sharing a source) reuse one compiled program.
+#[derive(Default)]
+pub struct ShaderCache {
+    passes: HashMap<String, Result<ShaderPass, String>>,
+}
+
+impl ShaderCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Render the shader under `key` (compiling `src` the first time) at `w`×`h`;
+    /// returns RGBA8 (top-left), or `None` if it failed to compile.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render(
+        &mut self,
+        key: &str,
+        src: &str,
+        w: i32,
+        h: i32,
+        time: f32,
+        frame: i32,
+        uniforms: &[(String, f32)],
+    ) -> Option<Vec<u8>> {
+        let entry = self.passes.entry(key.to_string()).or_insert_with(|| {
+            let r = ShaderPass::new(src);
+            if let Err(e) = &r {
+                eprintln!("pwetty-box: shader '{key}' compile error:\n{e}");
+            }
+            r
+        });
+        entry
+            .as_mut()
+            .ok()
+            .map(|pass| pass.render(w, h, time, frame, uniforms))
+    }
+}
 
 /// Full-screen-triangle vertex shader (no vertex buffers needed).
 const VERTEX_SRC: &str = "#version 300 es\n\

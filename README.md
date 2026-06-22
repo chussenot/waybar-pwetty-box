@@ -96,9 +96,15 @@ our own renderer, positioned via the Pango layout:
 "format": "vol <box bg='#f38ba8cc'>{{ value }}</box>"   // rounded highlight behind the value
 ```
 
-Currently `<box bg='#rrggbb[aa]'>` (a rounded highlight) is implemented; the same
-seam (`markup::process` → effect span → `text::span_rect` → draw) is where
-span-level GPU shader effects (`<glow>`, `<shader>`) plug in next.
+Implemented effect tags:
+- `<box bg='#rrggbb[aa]'>…</box>` — a Cairo rounded highlight behind the span.
+- `<glow color='#rrggbb'>…</glow>` — a soft, gently pulsing **GPU-shader** halo
+  behind the span (a built-in shader rendered through the shared shader cache).
+
+Both are positioned via the Pango layout (`markup::process` → effect span →
+`text::span_rect` → draw). A user-supplied per-span `<shader src='…'>` is the next
+addition on the same seam. Combine with `{% if %}` for conditional effects (e.g.
+glow a value only when it's critical).
 
 ### Background shaders (GPU)
 
@@ -150,8 +156,9 @@ src/
                 >>> EFFECT SEAM <<< `process` (XML routing: Pango-safe markup +
                 custom-tag EffectSpans) + escaping + `icon_span`. (Heavily tested.)
   text.rs       Pango/Cairo: lay out + paint markup; `span_rect` locates a span.
-  shader.rs     ShaderPass: compile a Shadertoy-style GLSL background shader,
-                render it to a texture (iResolution/iTime/iFrame), read back RGBA.
+  shader.rs     ShaderPass (compile a Shadertoy-style GLSL shader, render to a
+                texture, read back RGBA) + ShaderCache (compile-once by key) +
+                the built-in <glow> shader. Used for tile + span shaders.
   tile.rs       femtovg `Tile` trait + `TileContext` + the animated `DemoTile`
                 (shown when no content source is configured).
 ```
@@ -181,8 +188,8 @@ shader pass composited like the background layer).
     cargo run --example render_shader -- out.png examples/shaders/aurora.glsl [time]
   # rich text via Pango/Cairo
   cargo run --example render_text -- out.png
-  # content path (markup + <box> effect, optional icon arg) via draw_content
-  cargo run --example render_content -- out.png "vol <box bg='#f38ba8cc'>80%</box>" 44
+  # content path (markup + <box>/<glow> effects, optional icon arg) via draw_content
+  cargo run --example render_content -- out.png "CPU <glow color='#f38ba8'>96%</glow>" 44
   # the femtovg demo tile (surfaceless GL — force software so it can't touch your display)
   EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
     cargo run --example render_tile -- out.png [seconds]
