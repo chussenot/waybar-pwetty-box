@@ -21,15 +21,35 @@ pub struct EffectSpan {
     pub end: usize,
 }
 
+/// An inline embed — a sized element placed *in* the text flow (e.g.
+/// `<tickerbox>`). It reserves a box (via a Pango shape attribute over a single
+/// placeholder char at `start`) that surrounding text flows around; its `inner`
+/// markup is drawn into that box by the caller, not laid out inline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Embed {
+    pub tag: String,
+    pub attrs: Vec<(String, String)>,
+    /// Inner Pango markup, rendered into the reserved box.
+    pub inner: String,
+    /// Byte offset (in [`Processed::plain`]/markup) of the placeholder char.
+    pub start: usize,
+}
+
+/// The placeholder character an embed occupies in the laid-out text (the Unicode
+/// object-replacement character, 3 bytes in UTF-8).
+pub const EMBED_PLACEHOLDER: char = '\u{FFFC}';
+
 /// Result of processing tile content.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Processed {
     /// Pango-safe markup (standard tags only) to hand to Pango.
     pub markup: String,
-    /// Plain text with all tags removed; effect offsets index this.
+    /// Plain text with all tags removed; effect/embed offsets index this.
     pub plain: String,
-    /// Custom effect tags extracted from the content.
+    /// Custom effect tags (decorations behind a span).
     pub effects: Vec<EffectSpan>,
+    /// Inline embeds (sized elements placed in the text flow).
+    pub embeds: Vec<Embed>,
 }
 
 /// Escape for safe insertion into Pango markup — text *and* attribute values
@@ -78,21 +98,13 @@ pub fn icon_span(icon: &str, base_px: f64, scale: f64) -> String {
     )
 }
 
-/// If `content` is a `<tickerbox>…</tickerbox>` (a horizontally-scrolling
-/// marquee), return its inner markup. The inner text is rendered scrolling — not
-/// laid out inline — so it's pulled out before normal processing. Attributes on
-/// the open tag are ignored (v1). Returns `None` if there's no tickerbox.
-pub fn extract_tickerbox(content: &str) -> Option<String> {
-    let open = content.find("<tickerbox")?;
-    let inner_start = open + content[open..].find('>')? + 1;
-    let close = content.rfind("</tickerbox>")?;
-    (close >= inner_start).then(|| content[inner_start..close].to_string())
-}
-
-/// Process tile content into Pango-safe markup plus extracted effect spans.
-/// `custom_tags` lists tag names handled as effects; every other tag is assumed
-/// to be standard Pango markup. Malformed input falls back to escaped plain text.
-pub fn process(content: &str, custom_tags: &[&str]) -> Processed {
+/// Process tile content into Pango-safe markup plus extracted effects and embeds.
+/// `effect_tags` are decorations drawn behind a span (e.g. `box`, `glow`);
+/// `embed_tags` are inline sized elements (e.g. `tickerbox`) — each becomes one
+/// placeholder char in the flow (reserved via a shape attribute by the caller),
+/// with its inner markup pulled out to render into the reserved box. Everything
+/// else is standard Pango markup. Malformed input falls back to escaped text.
+pub fn process(content: &str, effect_tags: &[&str], embed_tags: &[&str]) -> Processed {
     let wrapped = format!("<r>{content}</r>");
     let doc = match roxmltree::Document::parse(&wrapped) {
         Ok(doc) => doc,
@@ -100,18 +112,57 @@ pub fn process(content: &str, custom_tags: &[&str]) -> Processed {
             return Processed {
                 markup: escape(content),
                 plain: content.to_string(),
-                effects: Vec::new(),
+                ..Default::default()
             };
         }
     };
 
     let mut out = Processed::default();
-    walk_children(doc.root_element(), custom_tags, &mut out);
+    walk_children(doc.root_element(), effect_tags, embed_tags, &mut out);
     out
 }
 
+fn collect_attrs(node: roxmltree::Node) -> Vec<(String, String)> {
+    node.attributes()
+        .map(|a| (a.name().to_string(), a.value().to_string()))
+        .collect()
+}
+
+/// Re-serialize an element's children as standard Pango markup — for an embed's
+/// inner content (rendered separately). Nested tags are treated as standard.
+fn serialize_inner(node: roxmltree::Node) -> String {
+    let mut s = String::new();
+    for child in node.children() {
+        if child.is_text() {
+            s.push_str(&escape(child.text().unwrap_or("")));
+        } else if child.is_element() {
+            let tag = child.tag_name().name();
+            s.push('<');
+            s.push_str(tag);
+            for attr in child.attributes() {
+                s.push(' ');
+                s.push_str(attr.name());
+                s.push_str("=\"");
+                s.push_str(&escape(attr.value()));
+                s.push('"');
+            }
+            s.push('>');
+            s.push_str(&serialize_inner(child));
+            s.push_str("</");
+            s.push_str(tag);
+            s.push('>');
+        }
+    }
+    s
+}
+
 /// Recursively walk the children of `node`, appending to `out`.
-fn walk_children(node: roxmltree::Node, custom_tags: &[&str], out: &mut Processed) {
+fn walk_children(
+    node: roxmltree::Node,
+    effect_tags: &[&str],
+    embed_tags: &[&str],
+    out: &mut Processed,
+) {
     for child in node.children() {
         if child.is_text() {
             let text = child.text().unwrap_or("");
@@ -119,18 +170,25 @@ fn walk_children(node: roxmltree::Node, custom_tags: &[&str], out: &mut Processe
             out.plain.push_str(text);
         } else if child.is_element() {
             let tag = child.tag_name().name();
-            if custom_tags.contains(&tag) {
+            if embed_tags.contains(&tag) {
+                // Inline embed: one placeholder char in the flow; inner pulled out.
+                let start = out.plain.len();
+                out.markup.push(EMBED_PLACEHOLDER);
+                out.plain.push(EMBED_PLACEHOLDER);
+                out.embeds.push(Embed {
+                    tag: tag.to_string(),
+                    attrs: collect_attrs(child),
+                    inner: serialize_inner(child),
+                    start,
+                });
+            } else if effect_tags.contains(&tag) {
                 // Custom effect tag: don't emit the tag, only its children.
                 let start = out.plain.len();
-                walk_children(child, custom_tags, out);
+                walk_children(child, effect_tags, embed_tags, out);
                 let end = out.plain.len();
-                let attrs = child
-                    .attributes()
-                    .map(|a| (a.name().to_string(), a.value().to_string()))
-                    .collect();
                 out.effects.push(EffectSpan {
                     tag: tag.to_string(),
-                    attrs,
+                    attrs: collect_attrs(child),
                     start,
                     end,
                 });
@@ -146,7 +204,7 @@ fn walk_children(node: roxmltree::Node, custom_tags: &[&str], out: &mut Processe
                     out.markup.push('"');
                 }
                 out.markup.push('>');
-                walk_children(child, custom_tags, out);
+                walk_children(child, effect_tags, embed_tags, out);
                 out.markup.push_str("</");
                 out.markup.push_str(tag);
                 out.markup.push('>');
@@ -168,22 +226,30 @@ mod tests {
     }
 
     #[test]
-    fn extract_tickerbox_inner() {
-        assert_eq!(
-            extract_tickerbox("<tickerbox>hello world</tickerbox>").as_deref(),
-            Some("hello world")
+    fn inline_embed_reserves_placeholder_and_pulls_inner() {
+        // A label, an inline tickerbox embed, and a trailing value.
+        let p = process(
+            r#"<b>NOW</b> <tickerbox width="200"><b>x</b> y</tickerbox> z"#,
+            &["box"],
+            &["tickerbox"],
         );
-        // Inner Pango markup is preserved verbatim.
+        // The embed becomes one placeholder char in the flow; surrounding markup
+        // (the bold label, the trailing text) is preserved.
+        assert!(p.markup.starts_with("<b>NOW</b> "));
+        assert!(p.markup.ends_with(" z"));
+        assert!(p.markup.contains(EMBED_PLACEHOLDER));
+        assert_eq!(p.effects.len(), 0);
+        assert_eq!(p.embeds.len(), 1);
+
+        let e = &p.embeds[0];
+        assert_eq!(e.tag, "tickerbox");
+        assert_eq!(e.attrs, vec![("width".to_string(), "200".to_string())]);
+        assert_eq!(e.inner, "<b>x</b> y"); // inner markup pulled out verbatim
+                                           // The placeholder sits where "NOW " ends in the plain text.
         assert_eq!(
-            extract_tickerbox("<tickerbox><b>x</b> y</tickerbox>").as_deref(),
-            Some("<b>x</b> y")
+            &p.plain[e.start..e.start + EMBED_PLACEHOLDER.len_utf8()],
+            "\u{FFFC}"
         );
-        // Attributes on the open tag are skipped.
-        assert_eq!(
-            extract_tickerbox(r#"<tickerbox speed="50">abc</tickerbox>"#).as_deref(),
-            Some("abc")
-        );
-        assert_eq!(extract_tickerbox("no ticker here"), None);
     }
 
     #[test]
@@ -236,7 +302,7 @@ mod tests {
 
     #[test]
     fn plain_text_passthrough() {
-        let p = process("hello & world", &["box"]);
+        let p = process("hello & world", &["box"], &[]);
         assert_eq!(p.markup, "hello &amp; world");
         assert_eq!(p.plain, "hello & world");
         assert!(p.effects.is_empty());
@@ -244,7 +310,7 @@ mod tests {
 
     #[test]
     fn standard_bold_passthrough() {
-        let p = process("<b>hi</b>", &["box"]);
+        let p = process("<b>hi</b>", &["box"], &[]);
         assert_eq!(p.markup, "<b>hi</b>");
         assert_eq!(p.plain, "hi");
         assert!(p.effects.is_empty());
@@ -252,7 +318,7 @@ mod tests {
 
     #[test]
     fn standard_span_attrs_preserved() {
-        let p = process(r##"<span foreground="#f00">hi</span>"##, &["box"]);
+        let p = process(r##"<span foreground="#f00">hi</span>"##, &["box"], &[]);
         assert_eq!(p.markup, r##"<span foreground="#f00">hi</span>"##);
         assert_eq!(p.plain, "hi");
         assert!(p.effects.is_empty());
@@ -260,7 +326,7 @@ mod tests {
 
     #[test]
     fn single_custom_tag() {
-        let p = process(r##"<box bg="#222">hi</box>"##, &["box"]);
+        let p = process(r##"<box bg="#222">hi</box>"##, &["box"], &[]);
         assert_eq!(p.markup, "hi");
         assert_eq!(p.plain, "hi");
         assert_eq!(p.effects.len(), 1);
@@ -274,7 +340,7 @@ mod tests {
 
     #[test]
     fn custom_tag_with_surrounding_text() {
-        let p = process("before <box>X</box> after", &["box"]);
+        let p = process("before <box>X</box> after", &["box"], &[]);
         assert_eq!(p.markup, "before X after");
         assert_eq!(p.plain, "before X after");
         assert_eq!(p.effects.len(), 1);
@@ -287,7 +353,7 @@ mod tests {
 
     #[test]
     fn standard_around_custom() {
-        let p = process("<b><box>x</box></b>", &["box"]);
+        let p = process("<b><box>x</box></b>", &["box"], &[]);
         assert_eq!(p.markup, "<b>x</b>");
         assert_eq!(p.plain, "x");
         assert_eq!(p.effects.len(), 1);
@@ -298,7 +364,7 @@ mod tests {
 
     #[test]
     fn custom_around_standard() {
-        let p = process("<box><b>x</b></box>", &["box"]);
+        let p = process("<box><b>x</b></box>", &["box"], &[]);
         assert_eq!(p.markup, "<b>x</b>");
         assert_eq!(p.plain, "x");
         assert_eq!(p.effects.len(), 1);
@@ -311,7 +377,7 @@ mod tests {
 
     #[test]
     fn two_sibling_custom_tags() {
-        let p = process("<box>aa</box><glow>bbb</glow>", &["box", "glow"]);
+        let p = process("<box>aa</box><glow>bbb</glow>", &["box", "glow"], &[]);
         assert_eq!(p.markup, "aabbb");
         assert_eq!(p.plain, "aabbb");
         assert_eq!(p.effects.len(), 2);
@@ -331,7 +397,7 @@ mod tests {
 
     #[test]
     fn malformed_input_falls_back() {
-        let p = process("a < b", &["box"]);
+        let p = process("a < b", &["box"], &[]);
         assert_eq!(p.markup, "a &lt; b");
         assert_eq!(p.plain, "a < b");
         assert!(p.effects.is_empty());
@@ -339,7 +405,7 @@ mod tests {
 
     #[test]
     fn nested_custom_in_custom() {
-        let p = process("<box>a<glow>b</glow>c</box>", &["box", "glow"]);
+        let p = process("<box>a<glow>b</glow>c</box>", &["box", "glow"], &[]);
         assert_eq!(p.markup, "abc");
         assert_eq!(p.plain, "abc");
         assert_eq!(p.effects.len(), 2);

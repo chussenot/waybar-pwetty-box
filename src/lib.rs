@@ -291,8 +291,10 @@ fn paint_rgba_at(
     let _ = cr.restore();
 }
 
-/// Custom effect tags routed away from Pango (see [`markup`]).
+/// Custom effect tags (decorations drawn behind a span).
 const EFFECT_TAGS: &[&str] = &["box", "glow"];
+/// Inline embed tags (sized elements placed in the text flow).
+const EMBED_TAGS: &[&str] = &["tickerbox"];
 
 /// GPU resources + timing a span effect needs (currently `<glow>`). Without it
 /// (e.g. a CPU-only caller), GPU span effects are skipped; `<box>` still draws.
@@ -315,15 +317,7 @@ pub fn draw_content(
     mut fx: Option<&mut EffectCtx>,
 ) {
     let time = fx.as_ref().map(|f| f.time).unwrap_or(0.0);
-
-    // A <tickerbox> takes over the tile: its inner text scrolls as a clipped,
-    // looping single-line marquee instead of being laid out inline.
-    if let Some(inner) = markup::extract_tickerbox(content_markup) {
-        draw_ticker(cr, &inner, w, h, config, time);
-        return;
-    }
-
-    let processed = markup::process(content_markup, EFFECT_TAGS);
+    let processed = markup::process(content_markup, EFFECT_TAGS, EMBED_TAGS);
 
     let style = text::TextStyle {
         font_family: "sans".into(),
@@ -331,6 +325,13 @@ pub fn draw_content(
         color: (0.95, 0.95, 1.0, 1.0),
         align_center: false,
     };
+
+    // Tiles with inline embeds compose left-to-right on a single line; tiles
+    // without use the richer wrapping + effect path.
+    if !processed.embeds.is_empty() {
+        draw_inline(cr, &processed, w, h, config, &style, time);
+        return;
+    }
 
     let (layout, ox, oy) = text::layout(cr, &processed.markup, w, h, &style);
 
@@ -351,13 +352,66 @@ pub fn draw_content(
     text::paint(cr, &layout, ox, oy, &style);
 }
 
+/// The `width` attribute of an embed, in logical px (default 160).
+fn embed_width(attrs: &[(String, String)]) -> f64 {
+    attrs
+        .iter()
+        .find(|(k, _)| k == "width")
+        .and_then(|(_, v)| v.parse().ok())
+        .unwrap_or(160.0)
+}
+
+/// Compose a single line of text segments interleaved with inline embeds,
+/// left-to-right: each text run is laid out and advanced past, and each embed
+/// (e.g. a ticker) is drawn into a `width`-wide box in the gap.
+fn draw_inline(
+    cr: &gtk::cairo::Context,
+    processed: &markup::Processed,
+    _w: f64,
+    h: f64,
+    config: &Config,
+    style: &text::TextStyle,
+    time: f32,
+) {
+    // markup splits into N+1 text segments around N embed placeholders.
+    let segments: Vec<&str> = processed.markup.split(markup::EMBED_PLACEHOLDER).collect();
+    let line_h = config.font_size as f64 * 1.4;
+    let ry = ((h - line_h) / 2.0).max(0.0);
+    let mut x = h * 0.12; // left pad, matching text::layout
+
+    for (i, seg) in segments.iter().enumerate() {
+        if !seg.is_empty() {
+            let (layout, oy, sw) = text::layout_line(cr, seg, h, style);
+            text::paint(cr, &layout, x, oy, style);
+            x += sw;
+        }
+        if let Some(embed) = processed.embeds.get(i) {
+            let ew = embed_width(&embed.attrs);
+            if embed.tag == "tickerbox" {
+                draw_ticker(cr, &embed.inner, (x, ry, ew, line_h), config, time);
+            }
+            x += ew;
+        }
+    }
+}
+
 /// Logical pixels/second the ticker scrolls (brisk, for fast readers).
 const TICKER_SPEED: f64 = 120.0;
 
-/// Render `inner` markup as a single line scrolling right-to-left, clipped to the
-/// `w`×`h` tile and looping, with a `◆` marker between repetitions so the loop
-/// seam is visible. `time` is seconds since start.
-fn draw_ticker(cr: &gtk::cairo::Context, inner: &str, w: f64, h: f64, config: &Config, time: f32) {
+/// Render `inner` markup as a single line scrolling right-to-left within the
+/// embed `rect`, clipped and looping, with a `◆` marker between repetitions so
+/// the loop seam is visible. `time` is seconds since start.
+fn draw_ticker(
+    cr: &gtk::cairo::Context,
+    inner: &str,
+    rect: text::Rect,
+    config: &Config,
+    time: f32,
+) {
+    let (rx, ry, rw, rh) = rect;
+    if rw < 1.0 || rh < 1.0 {
+        return;
+    }
     let style = text::TextStyle {
         font_family: "sans".into(),
         size_px: config.font_size as f64,
@@ -366,19 +420,19 @@ fn draw_ticker(cr: &gtk::cairo::Context, inner: &str, w: f64, h: f64, config: &C
     };
     // Loop unit = the text plus a marker, repeated; its width is the loop period.
     let unit = format!("{inner}   <span foreground=\"#89b4fa\">\u{25c6}</span>   ");
-    let (layout, oy, lw) = text::layout_line(cr, &unit, h, &style);
+    let (layout, oy, lw) = text::layout_line(cr, &unit, rh, &style);
     if lw < 1.0 {
         return;
     }
 
     let _ = cr.save();
-    cr.rectangle(0.0, 0.0, w, h);
+    cr.rectangle(rx, ry, rw, rh);
     cr.clip();
-    // Scroll left; tile copies of the loop unit to cover the viewport seamlessly.
+    // Scroll left; tile copies of the loop unit to cover the box seamlessly.
     let offset = (time as f64 * TICKER_SPEED).rem_euclid(lw);
-    let mut x = -offset;
-    while x < w {
-        text::paint(cr, &layout, x, oy, &style);
+    let mut x = rx - offset;
+    while x < rx + rw {
+        text::paint(cr, &layout, x, ry + oy, &style);
         x += lw;
     }
     let _ = cr.restore();

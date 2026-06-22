@@ -106,19 +106,24 @@ Both are positioned via the Pango layout (`markup::process` → effect span →
 addition on the same seam. Combine with `{% if %}` for conditional effects (e.g.
 glow a value only when it's critical).
 
-### Ticker
+### Inline embeds & the ticker
 
-For content wider than the tile, wrap it in `<tickerbox>…</tickerbox>` and it
-becomes a **single-line horizontal marquee** — clipped to the tile, scrolling
-briskly and looping continuously, with a `◆` marker at the loop seam:
+Some elements are **placed inline** in the text flow rather than laid out as
+glyphs — they reserve a fixed-width box that surrounding text composes around.
+The first is `<tickerbox width="N">…</tickerbox>`, a **scrolling marquee** for
+content wider than its box: clipped to the box, scrolling briskly, looping with a
+`◆` marker at the loop seam.
 
 ```jsonc
 "exec": "now-playing.sh",
-"format": "<tickerbox>♪ {{ artist }} — {{ title }}</tickerbox>"
+"format": "<b>NOW</b>  <tickerbox width='300'>♪ {{ artist }} — {{ title }}</tickerbox>  {{ time }}"
 ```
 
-The inner markup is rendered scrolling (not laid out inline), so it takes over the
-tile (animation is auto-enabled). Inner Pango markup is preserved.
+→ a bold label, a 300px scrolling ticker, and a value — composed on one line.
+Animation auto-enables; inner Pango markup is preserved. This inline-embed seam
+(`markup::Embed` → measured placement → draw into the box) is where future
+`<bar>`/`<ring>`/`<sparkline>` elements will live. (v1: embeds are top-level and a
+tile uses either embeds or `<box>`/`<glow>` effects, not both.)
 
 ### Background shaders (GPU)
 
