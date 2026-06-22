@@ -200,8 +200,14 @@ impl Module for PwettyBox {
             });
         }
 
-        // Animate by redrawing on the frame clock (for fps>0 or a live shader).
-        if shared.config.fps > 0 || shared.config.background_shader.is_some() {
+        // Animate by redrawing on the frame clock — for fps>0, a live shader, or
+        // a scrolling ticker.
+        let has_ticker = shared
+            .config
+            .format
+            .as_deref()
+            .is_some_and(|f| f.contains("<tickerbox"));
+        if shared.config.fps > 0 || shared.config.background_shader.is_some() || has_ticker {
             area.add_tick_callback(|area, _clock| {
                 area.queue_draw();
                 gtk::glib::ControlFlow::Continue
@@ -308,6 +314,15 @@ pub fn draw_content(
     config: &Config,
     mut fx: Option<&mut EffectCtx>,
 ) {
+    let time = fx.as_ref().map(|f| f.time).unwrap_or(0.0);
+
+    // A <tickerbox> takes over the tile: its inner text scrolls as a clipped,
+    // looping single-line marquee instead of being laid out inline.
+    if let Some(inner) = markup::extract_tickerbox(content_markup) {
+        draw_ticker(cr, &inner, w, h, config, time);
+        return;
+    }
+
     let processed = markup::process(content_markup, EFFECT_TAGS);
 
     let style = text::TextStyle {
@@ -334,6 +349,39 @@ pub fn draw_content(
     }
 
     text::paint(cr, &layout, ox, oy, &style);
+}
+
+/// Logical pixels/second the ticker scrolls (brisk, for fast readers).
+const TICKER_SPEED: f64 = 120.0;
+
+/// Render `inner` markup as a single line scrolling right-to-left, clipped to the
+/// `w`×`h` tile and looping, with a `◆` marker between repetitions so the loop
+/// seam is visible. `time` is seconds since start.
+fn draw_ticker(cr: &gtk::cairo::Context, inner: &str, w: f64, h: f64, config: &Config, time: f32) {
+    let style = text::TextStyle {
+        font_family: "sans".into(),
+        size_px: config.font_size as f64,
+        color: (0.95, 0.95, 1.0, 1.0),
+        align_center: false,
+    };
+    // Loop unit = the text plus a marker, repeated; its width is the loop period.
+    let unit = format!("{inner}   <span foreground=\"#89b4fa\">\u{25c6}</span>   ");
+    let (layout, oy, lw) = text::layout_line(cr, &unit, h, &style);
+    if lw < 1.0 {
+        return;
+    }
+
+    let _ = cr.save();
+    cr.rectangle(0.0, 0.0, w, h);
+    cr.clip();
+    // Scroll left; tile copies of the loop unit to cover the viewport seamlessly.
+    let offset = (time as f64 * TICKER_SPEED).rem_euclid(lw);
+    let mut x = -offset;
+    while x < w {
+        text::paint(cr, &layout, x, oy, &style);
+        x += lw;
+    }
+    let _ = cr.restore();
 }
 
 /// Draw a `<glow color="#rrggbb">` soft halo behind a text span (built-in GPU

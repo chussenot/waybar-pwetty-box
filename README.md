@@ -106,6 +106,20 @@ Both are positioned via the Pango layout (`markup::process` → effect span →
 addition on the same seam. Combine with `{% if %}` for conditional effects (e.g.
 glow a value only when it's critical).
 
+### Ticker
+
+For content wider than the tile, wrap it in `<tickerbox>…</tickerbox>` and it
+becomes a **single-line horizontal marquee** — clipped to the tile, scrolling
+briskly and looping continuously, with a `◆` marker at the loop seam:
+
+```jsonc
+"exec": "now-playing.sh",
+"format": "<tickerbox>♪ {{ artist }} — {{ title }}</tickerbox>"
+```
+
+The inner markup is rendered scrolling (not laid out inline), so it takes over the
+tile (animation is auto-enabled). Inner Pango markup is preserved.
+
 ### Background shaders (GPU)
 
 `background_shader` points at a **Shadertoy-style GLSL** fragment shader that

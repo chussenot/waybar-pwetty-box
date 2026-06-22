@@ -37,6 +37,12 @@ fn main() {
         ),
         _ => markup,
     };
+    // Animation time (arg 5), so time-driven effects (ticker) can be captured at
+    // different frames.
+    let time: f32 = std::env::args()
+        .nth(5)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.5);
 
     let surface = ImageSurface::create(Format::ARgb32, W, H).expect("surface");
     let cr = Context::new(&surface).expect("cairo context");
@@ -64,7 +70,7 @@ fn main() {
     // offscreen render exercises the same multi-renderer sequence as the live
     // widget, which is where GL-state bugs (like the glow glitch) surface.
     if let Ok(mut renderer) = pwetty_box::render::Renderer::new(&config, true) {
-        if let Ok((rw, rh, rgba)) = renderer.capture(W as u32, H as u32, 1.0, 0.5) {
+        if let Ok((rw, rh, rgba)) = renderer.capture(W as u32, H as u32, 1.0, time) {
             pwetty_box::composite_rgba(&cr, rw, rh, rgba, 1.0);
         }
     }
@@ -72,7 +78,7 @@ fn main() {
     let mut cache = pwetty_box::shader::ShaderCache::new();
     let mut fx = pwetty_box::EffectCtx {
         shaders: &mut cache,
-        time: 0.5,
+        time,
         frame: 0,
         scale: 1.0,
     };

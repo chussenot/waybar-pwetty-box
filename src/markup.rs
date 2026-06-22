@@ -78,6 +78,17 @@ pub fn icon_span(icon: &str, base_px: f64, scale: f64) -> String {
     )
 }
 
+/// If `content` is a `<tickerbox>…</tickerbox>` (a horizontally-scrolling
+/// marquee), return its inner markup. The inner text is rendered scrolling — not
+/// laid out inline — so it's pulled out before normal processing. Attributes on
+/// the open tag are ignored (v1). Returns `None` if there's no tickerbox.
+pub fn extract_tickerbox(content: &str) -> Option<String> {
+    let open = content.find("<tickerbox")?;
+    let inner_start = open + content[open..].find('>')? + 1;
+    let close = content.rfind("</tickerbox>")?;
+    (close >= inner_start).then(|| content[inner_start..close].to_string())
+}
+
 /// Process tile content into Pango-safe markup plus extracted effect spans.
 /// `custom_tags` lists tag names handled as effects; every other tag is assumed
 /// to be standard Pango markup. Malformed input falls back to escaped plain text.
@@ -154,6 +165,25 @@ mod tests {
         assert_eq!(escape("plain"), "plain");
         // Quotes too, so values are safe inside attributes.
         assert_eq!(escape(r#"q"' "#), "q&quot;&#39; ");
+    }
+
+    #[test]
+    fn extract_tickerbox_inner() {
+        assert_eq!(
+            extract_tickerbox("<tickerbox>hello world</tickerbox>").as_deref(),
+            Some("hello world")
+        );
+        // Inner Pango markup is preserved verbatim.
+        assert_eq!(
+            extract_tickerbox("<tickerbox><b>x</b> y</tickerbox>").as_deref(),
+            Some("<b>x</b> y")
+        );
+        // Attributes on the open tag are skipped.
+        assert_eq!(
+            extract_tickerbox(r#"<tickerbox speed="50">abc</tickerbox>"#).as_deref(),
+            Some("abc")
+        );
+        assert_eq!(extract_tickerbox("no ticker here"), None);
     }
 
     #[test]

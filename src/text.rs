@@ -69,6 +69,29 @@ pub fn layout(
     (layout, ox, oy)
 }
 
+/// Lay out `markup` as a single, unwrapped line for a tile of `height` device px.
+/// Returns the layout, the vertical offset to paint it at (centered), and the
+/// line's pixel width — used by the scrolling ticker.
+pub fn layout_line(
+    cr: &cairo::Context,
+    markup: &str,
+    height: f64,
+    style: &TextStyle,
+) -> (pango::Layout, f64, f64) {
+    let layout = pangocairo::functions::create_layout(cr);
+    layout.set_markup(markup);
+
+    let mut desc = pango::FontDescription::new();
+    desc.set_family(&style.font_family);
+    desc.set_absolute_size(style.size_px * pango::SCALE as f64);
+    layout.set_font_description(Some(&desc));
+
+    layout.set_width(-1); // no wrapping → a single line
+    let (lw, lh) = layout.pixel_size();
+    let oy = ((height - lh as f64) / 2.0).max(0.0);
+    (layout, oy, lw as f64)
+}
+
 /// Pixel rect of plain-text byte range `[start, end)` within `layout` painted at
 /// origin `(ox, oy)`.
 ///
