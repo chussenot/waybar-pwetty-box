@@ -170,7 +170,7 @@ impl Module for PwettyBox {
                             engine.frame = engine.frame.wrapping_add(1);
                         }
                         if let Some(rgba) = bg {
-                            paint_rgba(cr, wd as usize, hd as usize, rgba, scale as f64);
+                            composite_rgba(cr, wd as usize, hd as usize, rgba, scale as f64);
                         }
 
                         // Layer 2: Pango text + span effects, in logical coords.
@@ -228,14 +228,19 @@ impl Module for PwettyBox {
 }
 
 /// Composite an offscreen RGBA8 buffer (straight alpha, top-left origin) onto the
-/// widget's Cairo context, honoring per-pixel alpha against whatever is behind
-/// (e.g. a translucent bar). `device_scale` maps the device pixels we rendered at
-/// back to the widget's logical coordinate space.
-fn paint_rgba(cr: &gtk::cairo::Context, w: usize, h: usize, rgba: Vec<u8>, device_scale: f64) {
+/// Cairo context, honoring per-pixel alpha and scaling device pixels back to the
+/// logical area. Public so an offscreen harness can reproduce the live compose.
+pub fn composite_rgba(
+    cr: &gtk::cairo::Context,
+    w: usize,
+    h: usize,
+    rgba: Vec<u8>,
+    device_scale: f64,
+) {
     paint_rgba_at(cr, w, h, rgba, device_scale, 0.0, 0.0);
 }
 
-/// As [`paint_rgba`], but places the image's top-left at logical `(ox, oy)` —
+/// As [`composite_rgba`], but places the image's top-left at logical `(ox, oy)` —
 /// used to composite a span effect (e.g. a glow) at its position.
 fn paint_rgba_at(
     cr: &gtk::cairo::Context,

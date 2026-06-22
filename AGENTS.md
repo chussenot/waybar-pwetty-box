@@ -47,6 +47,32 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
+## Live demos
+
+**Verify headless first.** Before showing the user anything, render it offscreen
+and inspect it with your own vision (the `render_*` examples → PNG, pure CPU,
+safe). Only demo meaningful, already-verified results. The harness must be
+*faithful* to the live path — e.g. `render_content` runs the femtovg background
+*before* the content/effects, so GL-state interactions (like the glow-over-dirty-
+FBO glitch) actually reproduce offscreen. If a headless harness can't reproduce
+what the live widget does, fix the harness, don't skip the check.
+
+When the user asks for a **demo** of the module:
+
+- Run it as a **secondary waybar at the BOTTOM** of the screen — a normal
+  `waybar -c <demo-config>` client on the user's live session. This is safe.
+- **NEVER** demo via the nested `cage`/`niri` screenshot stack against the live
+  session — that has logged the user out (a `pkill niri` teardown). That stack is
+  only for offscreen screenshots (`test/shot.sh`); the prefer-offscreen path for
+  *visuals you inspect* is the `render_*` examples.
+- Launch it **in the background** and then **wait for further instruction** — do
+  not tear it down on your own.
+- **Before doing whatever you do next, kill that demo bar** — and only that bar:
+  match its unique config path (`pkill -f 'waybar -c <demo-config-path>'`), never
+  the user's own top bar or `niri`.
+
+Demo config + style live under `/tmp/.../showcase-bar/` (ephemeral).
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 

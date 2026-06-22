@@ -127,6 +127,12 @@ impl ShaderPass {
             let (fbo, ..) = self.target.unwrap();
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
             gl.viewport(0, 0, w, h);
+            // Deterministic state: another renderer (femtovg) may have left
+            // blending on with garbage in this FBO; we want the shader output to
+            // fully replace the target.
+            gl.disable(glow::BLEND);
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
             gl.use_program(Some(self.program));
             if let Some(loc) = gl.get_uniform_location(self.program, "iResolution") {
                 gl.uniform_3_f32(Some(&loc), w as f32, h as f32, 1.0);

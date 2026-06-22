@@ -55,13 +55,24 @@ fn main() {
         ..Config::default()
     };
 
-    // A GL context + shader cache so span shaders (e.g. <glow>) render here too.
+    // GL context for span shaders (e.g. <glow>).
     let gl = pwetty_box::offscreen::OffscreenGl::new().expect("surfaceless EGL");
     gl.make_current().expect("make current");
+
+    // Faithful to the live content-tile path: render the femtovg background layer
+    // first (it dirties GL state), THEN the content + span effects — so this
+    // offscreen render exercises the same multi-renderer sequence as the live
+    // widget, which is where GL-state bugs (like the glow glitch) surface.
+    if let Ok(mut renderer) = pwetty_box::render::Renderer::new(&config, true) {
+        if let Ok((rw, rh, rgba)) = renderer.capture(W as u32, H as u32, 1.0, 0.5) {
+            pwetty_box::composite_rgba(&cr, rw, rh, rgba, 1.0);
+        }
+    }
+
     let mut cache = pwetty_box::shader::ShaderCache::new();
     let mut fx = pwetty_box::EffectCtx {
         shaders: &mut cache,
-        time: 1.0,
+        time: 0.5,
         frame: 0,
         scale: 1.0,
     };
