@@ -1277,6 +1277,7 @@ dependencies = [
  "cairo-rs",
  "epoxy",
  "femtovg",
+ "glow",
  "image",
  "khronos-egl",
  "libloading",

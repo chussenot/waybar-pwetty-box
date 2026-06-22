@@ -19,12 +19,13 @@ pub mod gl;
 pub mod markup;
 pub mod offscreen;
 pub mod render;
+pub mod shader;
 pub mod text;
 pub mod tile;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use waybar_cffi::gtk::{self, prelude::*};
 use waybar_cffi::{waybar_module, InitInfo, Module};
@@ -38,6 +39,39 @@ struct Engine {
     gl: OffscreenGl,
     renderer: Renderer,
     start: Instant,
+    /// Optional tile-level background shader (path + lazily compiled + mtime).
+    shader_path: Option<String>,
+    shader: Option<shader::ShaderPass>,
+    shader_mtime: Option<SystemTime>,
+    frame: i32,
+}
+
+impl Engine {
+    /// Compile the background shader (or recompile if the file changed). A GL
+    /// context must be current. Compile errors are logged and leave no shader.
+    fn refresh_shader(&mut self) {
+        let Some(path) = self.shader_path.clone() else {
+            return;
+        };
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if self.shader.is_some() && mtime == self.shader_mtime {
+            return; // unchanged
+        }
+        self.shader_mtime = mtime;
+        match std::fs::read_to_string(&path) {
+            Ok(src) => match shader::ShaderPass::new(&src) {
+                Ok(p) => self.shader = Some(p),
+                Err(e) => {
+                    eprintln!("pwetty-box: shader compile error in '{path}':\n{e}");
+                    self.shader = None;
+                }
+            },
+            Err(e) => {
+                eprintln!("pwetty-box: cannot read shader '{path}': {e}");
+                self.shader = None;
+            }
+        }
+    }
 }
 
 /// Shared between `init` and the draw/tick callbacks. GTK is single-threaded, so
@@ -75,6 +109,10 @@ impl Module for PwettyBox {
                     gl,
                     renderer,
                     start: Instant::now(),
+                    shader_path: config.background_shader.clone(),
+                    shader: None,
+                    shader_mtime: None,
+                    frame: 0,
                 }),
                 Err(e) => {
                     eprintln!("pwetty-box: renderer init failed: {e:?}");
@@ -98,17 +136,32 @@ impl Module for PwettyBox {
             area.connect_draw(move |area, cr| {
                 let scale = area.scale_factor().max(1);
 
-                // Layer 1: the femtovg GPU layer (background / effects), rendered
-                // at device resolution and composited via Cairo.
+                // Layer 1: the GPU background, composited via Cairo. It's either a
+                // tile-level shader (when `background_shader` is set) or the
+                // femtovg layer (the demo tile / background colour).
                 if let Some(engine) = shared.engine.borrow_mut().as_mut() {
                     let w = (area.allocated_width().max(1) * scale) as u32;
                     let h = (area.allocated_height().max(1) * scale) as u32;
                     if engine.gl.make_current().is_ok() {
                         let time = engine.start.elapsed().as_secs_f32();
-                        if let Ok((rw, rh, rgba)) =
-                            engine.renderer.capture(w, h, scale as f32, time)
-                        {
-                            paint_rgba(cr, rw, rh, rgba, scale as f64);
+                        engine.refresh_shader();
+                        let frame = engine.frame;
+                        let bg: Option<Vec<u8>> = if let Some(sh) = engine.shader.as_mut() {
+                            Some(sh.render(w as i32, h as i32, time, frame))
+                        } else if engine.shader_path.is_none() {
+                            engine
+                                .renderer
+                                .capture(w, h, scale as f32, time)
+                                .ok()
+                                .map(|(_, _, rgba)| rgba)
+                        } else {
+                            None // shader configured but failed to compile
+                        };
+                        if engine.shader.is_some() {
+                            engine.frame = engine.frame.wrapping_add(1);
+                        }
+                        if let Some(rgba) = bg {
+                            paint_rgba(cr, w as usize, h as usize, rgba, scale as f64);
                         }
                     }
                 }
@@ -126,8 +179,8 @@ impl Module for PwettyBox {
             });
         }
 
-        // Animate by redrawing on the frame clock.
-        if shared.config.fps > 0 {
+        // Animate by redrawing on the frame clock (for fps>0 or a live shader).
+        if shared.config.fps > 0 || shared.config.background_shader.is_some() {
             area.add_tick_callback(|area, _clock| {
                 area.queue_draw();
                 gtk::glib::ControlFlow::Continue

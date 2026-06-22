@@ -65,6 +65,7 @@ All keys live inside the `cffi/pwetty` block (parsed by `src/config.rs`):
 | `format` | `"{{ value }}"` | **Template** ([minijinja](https://github.com/mitsuhiko/minijinja)) rendered against the data → a Pango-markup string. See below. |
 | `font_size` | `14.0` | Base text size in pixels (per-span sizes via markup override it). |
 | `background` | _(transparent)_ | Tile background as `#rrggbb` / `#rrggbbaa`. Leave unset for a **transparent** tile (the bar shows through); set it for an opaque background. |
+| `background_shader` | _(unset)_ | Path to a Shadertoy-style GLSL fragment shader rendered as the tile's animated background (see below). Hot-reloaded on file change. |
 | `font_path` / `icon_font_path` | _(system)_ | Fonts for the **demo tile** (femtovg) only; content tiles render via Pango using system fonts. |
 
 With no `text`/`exec`, the module renders the animated demo tile. With either set,
@@ -95,8 +96,26 @@ our own renderer, positioned via the Pango layout:
 ```
 
 Currently `<box bg='#rrggbb[aa]'>` (a rounded highlight) is implemented; the same
-seam (`markup::process` → effect span → `text::span_rect` → draw) is where GPU
-shader effects (`<glow>`, `<shader>`) plug in next.
+seam (`markup::process` → effect span → `text::span_rect` → draw) is where
+span-level GPU shader effects (`<glow>`, `<shader>`) plug in next.
+
+### Background shaders (GPU)
+
+`background_shader` points at a **Shadertoy-style GLSL** fragment shader that
+fills the whole tile, behind the content:
+
+```jsonc
+"background_shader": "/path/to/aurora.glsl",
+"fps": 30,   // animate
+"format": "<span weight='bold' foreground='#ffffff'>{{ time }}</span>"
+```
+
+The shader defines `void mainImage(out vec4 fragColor, in vec2 fragCoord)` and
+receives `iResolution` / `iTime` / `iFrame` (paste-from-shadertoy.com friendly).
+It's rendered on our own GL context into a texture, read back, and composited as
+the background; the Pango content draws on top. The file is **hot-reloaded** when
+it changes, and compile errors are logged. Data-driven uniforms (a shader that
+reacts to `{{ cpu.pct }}`) are the planned next step.
 
 ## Architecture / where to extend
 
@@ -117,6 +136,8 @@ src/
                 >>> EFFECT SEAM <<< `process` (XML routing: Pango-safe markup +
                 custom-tag EffectSpans) + escaping + `icon_span`. (Heavily tested.)
   text.rs       Pango/Cairo: lay out + paint markup; `span_rect` locates a span.
+  shader.rs     ShaderPass: compile a Shadertoy-style GLSL background shader,
+                render it to a texture (iResolution/iTime/iFrame), read back RGBA.
   tile.rs       femtovg `Tile` trait + `TileContext` + the animated `DemoTile`
                 (shown when no content source is configured).
 ```
@@ -141,6 +162,9 @@ shader pass composited like the background layer).
   ```bash
   # data → template → tile (JSON data bound into a multi-line template)
   cargo run --example render_data -- out.png            # default nas dashboard
+  # a tile background shader, one frame (surfaceless GL — force software to be safe)
+  EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
+    cargo run --example render_shader -- out.png examples/shaders/aurora.glsl [time]
   # rich text via Pango/Cairo
   cargo run --example render_text -- out.png
   # content path (markup + <box> effect, optional icon arg) via draw_content

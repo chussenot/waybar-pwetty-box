@@ -38,9 +38,12 @@ pub struct Config {
     pub interval: u64,
     /// Static icon glyph (e.g. a Nerd Font character), drawn before the text.
     pub icon: Option<String>,
-    /// Text template; `{}` is replaced by the static text / command output.
-    /// Defaults to `"{}"` (raw).
+    /// Tile template (minijinja) rendered against the data into Pango markup.
+    /// Defaults to `"{{ value }}"`.
     pub format: Option<String>,
+    /// Path to a Shadertoy-style GLSL fragment shader (defining `mainImage`)
+    /// used as the tile's animated background. Reloaded when the file changes.
+    pub background_shader: Option<String>,
 }
 
 impl Default for Config {
@@ -58,6 +61,7 @@ impl Default for Config {
             interval: 0,
             icon: None,
             format: None,
+            background_shader: None,
         }
     }
 }

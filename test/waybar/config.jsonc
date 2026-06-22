@@ -12,10 +12,11 @@
     "module_path": "/home/zor/Perso/pwetty-box-rs/target/release/libpwetty_box.so",
     "width": 360,
     "height": 72,
-    "fps": 0,
+    "fps": 30,
     "exec": "date '+{\"time\":\"%H:%M:%S\",\"date\":\"%a %d %b\"}'",
     "interval": 1,
     "font_size": 14,
-    "format": "<span size='xx-large' weight='bold' foreground='#89b4fa'>{{ time }}</span>\n<span size='small' foreground='#9399b2'>{{ date }}</span>"
+    "background_shader": "/home/zor/Perso/pwetty-box-rs/examples/shaders/aurora.glsl",
+    "format": "<span size='xx-large' weight='bold' foreground='#ffffff'>{{ time }}</span>\n<span size='small' foreground='#f0f0f0'>{{ date }}</span>"
   }
 }
