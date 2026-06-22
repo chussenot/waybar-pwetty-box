@@ -151,23 +151,32 @@ impl Module for PwettyBox {
                     .unwrap_or_default();
 
                 if let Some(engine) = shared.engine.borrow_mut().as_mut() {
-                    if engine.gl.make_current().is_ok() {
-                        let wd = (area.allocated_width().max(1) * scale) as u32;
-                        let hd = (area.allocated_height().max(1) * scale) as u32;
-                        let time = engine.start.elapsed().as_secs_f32();
+                    let wd = (area.allocated_width().max(1) * scale) as u32;
+                    let hd = (area.allocated_height().max(1) * scale) as u32;
+                    let wl = area.allocated_width().max(1) as f64;
+                    let hl = area.allocated_height().max(1) as f64;
+                    let time = engine.start.elapsed().as_secs_f32();
+
+                    // Current content markup (content tiles only).
+                    let markup = content_draw.as_ref().map(|s| s.markup());
+                    let has_content = markup.is_some();
+
+                    // GL is only needed for a background shader, the demo tile
+                    // (femtovg), or a span `<glow>`. Pure-Cairo content tiles
+                    // (dots/icons/ticker/pulse are all CPU) skip the EGL
+                    // `make_current` entirely — a real per-frame saving that lets
+                    // us animate at a higher rate without melting the laptop.
+                    let needs_glow = markup.as_deref().is_some_and(|m| m.contains("<glow"));
+                    let needs_gl = !has_content || engine.shader_path.is_some() || needs_glow;
+
+                    if !needs_gl || engine.gl.make_current().is_ok() {
+                        engine.refresh_shader();
                         let frame = engine.frame;
 
-                        // Layer 1: background.
-                        // - A tile-level shader animates → render it each frame.
-                        // - A *content* tile with no shader has a STATIC background
-                        //   (transparent or a solid colour) → just fill it in Cairo,
-                        //   skipping the per-frame femtovg GPU render+readback (the
-                        //   big per-frame cost). The femtovg layer is only rendered
-                        //   for the demo tile (no content source).
-                        engine.refresh_shader();
-                        let has_content = content_draw.is_some();
+                        // Layer 1: background. A shader renders each frame; the demo
+                        // tile uses femtovg; a content tile's background is static, so
+                        // just fill it in Cairo (no per-frame GPU render+readback).
                         let bg: Option<Vec<u8>> = if let Some(sh) = engine.shader.as_mut() {
-                            engine.frame = engine.frame.wrapping_add(1);
                             Some(sh.render(wd as i32, hd as i32, time, frame, &shader_uniforms))
                         } else if !has_content && engine.shader_path.is_none() {
                             engine
@@ -178,10 +187,12 @@ impl Module for PwettyBox {
                         } else {
                             None
                         };
+                        if engine.shader.is_some() {
+                            engine.frame = engine.frame.wrapping_add(1);
+                        }
                         if let Some(rgba) = bg {
                             composite_rgba(cr, wd as usize, hd as usize, rgba, scale as f64);
                         } else if has_content && engine.shader_path.is_none() {
-                            // Static background for a content tile (cheap, no GPU).
                             if let Some(c) = shared
                                 .config
                                 .background
@@ -193,25 +204,15 @@ impl Module for PwettyBox {
                             }
                         }
 
-                        // Layer 2: Pango text + span effects, in logical coords.
-                        // Span shaders (e.g. <glow>) render via the GL cache.
-                        if let Some(store) = &content_draw {
-                            let wl = area.allocated_width().max(1) as f64;
-                            let hl = area.allocated_height().max(1) as f64;
+                        // Layer 2: Pango text + inline embeds / span effects.
+                        if let Some(markup) = &markup {
                             let mut fx = EffectCtx {
                                 shaders: &mut engine.span_shaders,
                                 time,
                                 frame,
                                 scale: scale as f64,
                             };
-                            draw_content(
-                                cr,
-                                &store.markup(),
-                                wl,
-                                hl,
-                                &shared.config,
-                                Some(&mut fx),
-                            );
+                            draw_content(cr, markup, wl, hl, &shared.config, Some(&mut fx));
                         }
                     }
                 }
@@ -388,9 +389,9 @@ const EFFECT_TAGS: &[&str] = &["box", "glow"];
 const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon"];
 
 /// Default redraw rate for auto-animated tiles (blink/pulse/ticker) when the
-/// config doesn't pin `fps`. Well below the monitor's 60Hz — smooth enough for
-/// these animations and far cheaper. Override per-module with `fps`.
-const DEFAULT_ANIM_FPS: u32 = 20;
+/// config doesn't pin `fps`. Below the monitor's 60Hz but smooth (the per-frame
+/// cost is now Cairo-only for content tiles). Override per-module with `fps`.
+const DEFAULT_ANIM_FPS: u32 = 30;
 
 /// GPU resources + timing a span effect needs (currently `<glow>`). Without it
 /// (e.g. a CPU-only caller), GPU span effects are skipped; `<box>` still draws.
