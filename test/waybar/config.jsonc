@@ -1,0 +1,17 @@
+// Waybar config for the headless screenshot harness: a single bar hosting only
+// our CFFI module, sized generously so the tile is clearly visible in the shot.
+{
+  "layer": "top",
+  "position": "top",
+  "height": 84,
+  "margin-top": 8,
+  "margin-left": 8,
+  "modules-center": ["cffi/pwetty"],
+
+  "cffi/pwetty": {
+    "module_path": "/home/zor/Perso/pwetty-box-rs/target/release/libpwetty_box.so",
+    "width": 360,
+    "height": 64,
+    "fps": 60
+  }
+}

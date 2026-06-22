@@ -1,0 +1,35 @@
+[package]
+name = "pwetty-box"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Waybar CFFI module that draws elaborate multiline text/icon tiles with GPU shaders (GtkGLArea + femtovg)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+# cdylib: waybar dlopens the module. rlib: so examples/bins (e.g. the offscreen
+# renderer) can link the crate's Rust API.
+name = "pwetty_box"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Waybar CFFI ABI bindings. Re-exports gtk-rs 0.18 (GTK3) as `waybar_cffi::gtk`.
+waybar-cffi = "0.1.1"
+# GPU 2D canvas: multiline text, paths, gradients, font-glyph icons. OpenGl renderer.
+femtovg = "0.25"
+# Resolve GL function pointers from the in-process libepoxy that waybar already links.
+epoxy = "0.1"
+libloading = "0.8"
+# Our own surfaceless EGL context: we render femtovg offscreen and composite via
+# Cairo, because a GtkGLArea can't alpha-composite against a translucent bar.
+khronos-egl = { version = "6", features = ["static"] }
+# JSON config plumbed through from the waybar `cffi/...` block.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+image = "0.25"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

@@ -1,0 +1,22 @@
+// Minimal niri config for nested headless screenshot runs.
+// Runs as a winit client inside a headless cage; hosts waybar's layer surface.
+prefer-no-csd
+hotkey-overlay {
+    skip-at-startup
+}
+
+input {
+    keyboard {
+        // nothing — nested, driven by the orchestrator script
+    }
+}
+
+// winit (nested) output. Match cage's headless output (1280x720) so the
+// screenshot dimensions are deterministic.
+output "winit" {
+    mode "1280x720"
+}
+
+binds {
+    Mod+Shift+E { quit skip-confirmation=true; }
+}

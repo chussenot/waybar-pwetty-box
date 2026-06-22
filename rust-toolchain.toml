@@ -1,0 +1,5 @@
+[toolchain]
+# waybar-cffi (>=1.85) and femtovg (>=1.88) raise the MSRV above this machine's
+# stale `stable` (1.80). Pin to an installed toolchain that satisfies both.
+channel = "1.92"
+components = ["rustfmt", "clippy"]

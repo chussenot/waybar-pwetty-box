@@ -1,0 +1,22 @@
+// Example Waybar config snippet. Drop the `cffi/pwetty` block into your
+// ~/.config/waybar/config (or config.jsonc) and reference it in your layout.
+{
+  "modules-right": ["cffi/pwetty"],
+
+  "cffi/pwetty": {
+    // Absolute path to the built shared object.
+    "module_path": "/home/zor/Perso/pwetty-box-rs/target/release/libpwetty_box.so",
+
+    // --- everything below is this module's own config (see src/config.rs) ---
+    "width": 360,
+    "height": 64,
+    "fps": 60,
+    "font_size": 14.0,
+    // Optional explicit fonts; omit to use system fallbacks.
+    // "font_path": "/usr/share/fonts/TTF/Hack-Regular.ttf",
+    // "icon_font_path": "/usr/share/fonts/TTF/SymbolsNerdFont-Regular.ttf",
+    // Tile background. Omit for a TRANSPARENT tile (the bar shows through);
+    // set a hex color (#rrggbb / #rrggbbaa) for an opaque tile background.
+    // "background": "#1e1e2e"
+  }
+}
