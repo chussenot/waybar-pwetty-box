@@ -58,11 +58,11 @@ All keys live inside the `cffi/pwetty` block (parsed by `src/config.rs`):
 |---|---|---|
 | `width` / `height` | `220` / `36` | Tile size in logical pixels. |
 | `fps` | `60` | Animation framerate; `0` = static/content-driven (redraw only when content changes). |
-| `text` | _(unset)_ | Static value, substituted into `format` (escaped). Use for fixed content. |
-| `exec` | _(unset)_ | Shell command; its stdout is the value substituted into `format`. |
+| `text` | _(unset)_ | Static data for the template. Use for fixed content. |
+| `exec` | _(unset)_ | Shell command; its stdout is the tile's **data** (JSON if parseable, else plain text). |
 | `interval` | `0` | Re-run cadence for `exec`, in seconds (`0` = run once). |
-| `icon` | _(unset)_ | Glyph prepended to the text (rendered via Pango font fallback). |
-| `format` | `"{}"` | **Pango markup** template; `{}` = the escaped `text`/`exec` value. May contain custom effect tags (see below). |
+| `icon` | _(unset)_ | Glyph prepended to the content, sized + vertically centered on the text. |
+| `format` | `"{{ value }}"` | **Template** ([minijinja](https://github.com/mitsuhiko/minijinja)) rendered against the data → a Pango-markup string. See below. |
 | `font_size` | `14.0` | Base text size in pixels (per-span sizes via markup override it). |
 | `background` | _(transparent)_ | Tile background as `#rrggbb` / `#rrggbbaa`. Leave unset for a **transparent** tile (the bar shows through); set it for an opaque background. |
 | `font_path` / `icon_font_path` | _(system)_ | Fonts for the **demo tile** (femtovg) only; content tiles render via Pango using system fonts. |
@@ -71,21 +71,27 @@ With no `text`/`exec`, the module renders the animated demo tile. With either se
 it renders a content tile; `exec` refreshes on a background thread, so a slow
 command never blocks the bar.
 
-### Rich content & custom effects
+### Data → template → tile
 
-`format` is a **Pango markup** template, so content can be styled with the usual
-Pango spans — per-span colour, size, weight, font, plus `\n` for multiple lines:
+The model is **data-bound templates**. A command emits a **JSON object** (the
+data); `format` is a [minijinja](https://github.com/mitsuhiko/minijinja) template
+(Jinja-style `{{ … }}` / `{% … %}`) that binds fields into **Pango markup**:
 
 ```jsonc
-"format": "<span size='xx-large' weight='bold' foreground='#89b4fa'>{}</span>\n<span size='small' foreground='#9399b2'>load</span>"
+"exec": "sysinfo.sh",   // prints e.g. {"host":"nas","cpu":{"pct":82,"color":"#fab387"},"mem":{"used":"7.1G"}}
+"interval": 2,
+"format": "<span size='xx-large' weight='bold'>{{ host }}</span>\n<span foreground='{{ cpu.color }}'>CPU {{ cpu.pct }}%</span>  MEM {{ mem.used }}\n{% if cpu.pct >= 90 %}<span foreground='#f38ba8' weight='bold'>⚠ high</span>{% endif %}"
 ```
 
-The substituted `{}` value is Pango-escaped, so command output can't break the
-markup. On top of standard Pango tags, **custom effect tags** are extracted and
-drawn by our own renderer, positioned via the Pango layout:
+- **Binding:** `{{ host }}`, `{{ cpu.pct }}`, `{{ items[0].name }}` — object fields are top-level; a non-object (plain-text) command is available as `{{ value }}`.
+- **Safety:** bound values are auto-escaped (XML), so command output can't break the markup; the template's own `<span>`s are preserved.
+- **Logic:** filters (`{{ x | round }}`, `{{ y | default('?') }}`) and `{% if %}`/`{% for %}` — so **state styling lives in the data or the template** (the script picks a colour, *or* the template branches on a threshold). No separate "states" system.
+
+On top of standard Pango tags, **custom effect tags** are extracted and drawn by
+our own renderer, positioned via the Pango layout:
 
 ```jsonc
-"format": "vol <box bg='#f38ba8cc'>{}</box>"   // rounded highlight behind the value
+"format": "vol <box bg='#f38ba8cc'>{{ value }}</box>"   // rounded highlight behind the value
 ```
 
 Currently `<box bg='#rrggbb[aa]'>` (a rounded highlight) is implemented; the same
@@ -105,11 +111,11 @@ src/
   render.rs     femtovg Canvas lifecycle, `capture()` (render to an offscreen
                 image + read back RGBA), `parse_hex_color`.
   config.rs     serde Config deserialized from the `cffi/...` block.
-  content.rs    TileContent + ContentStore (thread-safe) + sources (static text
-                or a command refreshed on a background thread) → a markup string.
-  markup.rs     >>> EFFECT SEAM <<< pure XML routing: split content into
-                Pango-safe markup + extracted custom-tag EffectSpans. Escaping,
-                `apply_format`. (Heavily unit-tested.)
+  content.rs    ContentStore (thread-safe) + sources: a command's output is
+                parsed as JSON data, bound through the template → a markup string.
+  markup.rs     `render_template` (minijinja: data + template → markup) +
+                >>> EFFECT SEAM <<< `process` (XML routing: Pango-safe markup +
+                custom-tag EffectSpans) + escaping + `icon_span`. (Heavily tested.)
   text.rs       Pango/Cairo: lay out + paint markup; `span_rect` locates a span.
   tile.rs       femtovg `Tile` trait + `TileContext` + the animated `DemoTile`
                 (shown when no content source is configured).
@@ -128,15 +134,17 @@ shader pass composited like the background layer).
 
 ## Testing & screenshots
 
-- **Unit tests** (`cargo test`): the markup router (`markup.rs`, 14 tests),
-  content/`build_markup`, config deserialization, `parse_hex_color` — all pure
-  logic, no GL/GTK context needed.
+- **Unit tests** (`cargo test`): the markup router + `render_template` binding
+  (`markup.rs`), content (`build_markup`/`parse_data`), config, `parse_hex_color`
+  — all pure logic, no GL/GTK context needed.
 - **Vision tests** (offscreen → PNG, pure CPU, safe anywhere):
   ```bash
+  # data → template → tile (JSON data bound into a multi-line template)
+  cargo run --example render_data -- out.png            # default nas dashboard
   # rich text via Pango/Cairo
   cargo run --example render_text -- out.png
-  # full content path (Pango markup + <box> effect) via draw_content
-  cargo run --example render_content -- out.png "<box bg='#a6e3a180'>42%</box>" 40
+  # content path (markup + <box> effect, optional icon arg) via draw_content
+  cargo run --example render_content -- out.png "vol <box bg='#f38ba8cc'>80%</box>" 44
   # the femtovg demo tile (surfaceless GL — force software so it can't touch your display)
   EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
     cargo run --example render_tile -- out.png [seconds]

@@ -9,24 +9,25 @@
 
     // --- everything below is this module's own config (see src/config.rs) ---
     "width": 360,
-    "height": 64,
+    "height": 72,
     // Animation framerate. Use 0 for static/content-driven tiles (redraw on
     // content change only); >0 to animate (e.g. the DemoTile gradient).
     "fps": 0,
     "font_size": 14.0,
 
-    // --- content (omit all of these to get the animated demo tile) ---
-    // Static text (supports \n for multiline):
-    // "text": "hello\nworld",
-    // ...or a command, re-run every `interval` seconds (0 = once):
-    "exec": "date '+%H:%M:%S%n%a %d %b'",
+    // --- content (omit `text`/`exec` to get the animated demo tile) ---
+    // A command whose output is the tile DATA. JSON output → fields bind by name;
+    // plain text → available as {{ value }}. Re-runs every `interval` seconds.
+    "exec": "date '+{\"time\":\"%H:%M:%S\",\"date\":\"%a %d %b\"}'",
     "interval": 1,
-    // "icon": "",                 // glyph drawn before the text (needs icon_font_path)
-    // "format": "{}",              // template; {} = text/command output
+    // ...or static data instead of a command:
+    // "text": "hello",
 
-    // Optional explicit fonts; omit to use system fallbacks.
-    // "font_path": "/usr/share/fonts/TTF/Hack-Regular.ttf",
-    // "icon_font_path": "/usr/share/fonts/TTF/SymbolsNerdFont-Regular.ttf",
+    // `format` is a minijinja template (Jinja-style {{ }} / {% %}) rendered
+    // against the data, producing Pango markup. Bound values are auto-escaped.
+    "format": "<span size='xx-large' weight='bold' foreground='#89b4fa'>{{ time }}</span>\n<span size='small' foreground='#9399b2'>{{ date }}</span>",
+
+    // "icon": "",     // glyph prepended to the content, auto-centered on the text
     // Tile background. Omit for a TRANSPARENT tile (the bar shows through);
     // set a hex color (#rrggbb / #rrggbbaa) for an opaque tile background.
     // "background": "#1e1e2e"

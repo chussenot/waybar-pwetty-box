@@ -11,11 +11,11 @@
   "cffi/pwetty": {
     "module_path": "/home/zor/Perso/pwetty-box-rs/target/release/libpwetty_box.so",
     "width": 360,
-    "height": 64,
+    "height": 72,
     "fps": 0,
-    "exec": "date '+%H:%M:%S'",
+    "exec": "date '+{\"time\":\"%H:%M:%S\",\"date\":\"%a %d %b\"}'",
     "interval": 1,
-    "font_size": 16,
-    "format": "<box bg='#31324488'><span size='xx-large' weight='bold' foreground='#89b4fa'>{}</span></box>"
+    "font_size": 14,
+    "format": "<span size='xx-large' weight='bold' foreground='#89b4fa'>{{ time }}</span>\n<span size='small' foreground='#9399b2'>{{ date }}</span>"
   }
 }

@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use serde_json::Value;
+
 use crate::config::Config;
 use crate::markup;
 
@@ -72,11 +74,23 @@ impl ContentStore {
 /// How much larger than the base text an icon glyph is drawn.
 const ICON_SCALE: f64 = 1.3;
 
-/// Build a tile's markup: substitute `value` into the `format` markup template
-/// (value escaped) and prepend the `icon` glyph if set. The icon is wrapped so
-/// it renders larger and vertically centered on the text (`base_px` = text size).
-fn build_markup(format: &str, icon: &Option<String>, value: &str, base_px: f64) -> String {
-    let body = markup::apply_format(format, value);
+/// Parse a command's output as JSON; if it isn't valid JSON, treat the whole
+/// output as a string value (so plain-text commands still work via `{{ value }}`).
+fn parse_data(output: &str) -> Value {
+    serde_json::from_str(output).unwrap_or_else(|_| Value::String(output.to_string()))
+}
+
+/// Build a tile's markup: render the `template` against `data`, then prepend the
+/// `icon` glyph if set (sized + vertically centered; `base_px` = text size).
+/// A template error is surfaced inline so it's visible on the bar.
+fn build_markup(template: &str, icon: &Option<String>, data: &Value, base_px: f64) -> String {
+    let body = match markup::render_template(template, data) {
+        Ok(s) => s,
+        Err(e) => format!(
+            "<span foreground=\"#f38ba8\">template error: {}</span>",
+            markup::escape(&e.to_string())
+        ),
+    };
     match icon {
         Some(i) if !i.is_empty() => {
             format!("{}  {body}", markup::icon_span(i, base_px, ICON_SCALE))
@@ -89,7 +103,10 @@ fn build_markup(format: &str, icon: &Option<String>, value: &str, base_px: f64) 
 /// For `exec`, spawns a background refresh thread. Returns `None` when no content
 /// source is configured (the caller falls back to the demo tile).
 pub fn from_config(config: &Config) -> Option<ContentStore> {
-    let format = config.format.clone().unwrap_or_else(|| "{}".to_string());
+    let template = config
+        .format
+        .clone()
+        .unwrap_or_else(|| "{{ value }}".to_string());
     let icon = config.icon.clone();
     let base_px = config.font_size as f64;
 
@@ -99,9 +116,9 @@ pub fn from_config(config: &Config) -> Option<ContentStore> {
         let publish = store.clone();
         // Detached: lives for the process (waybar modules are process-lifetime).
         thread::spawn(move || loop {
-            let raw = run_command(&exec);
+            let data = parse_data(&run_command(&exec));
             publish.set(TileContent {
-                markup: build_markup(&format, &icon, &raw, base_px),
+                markup: build_markup(&template, &icon, &data, base_px),
             });
             if interval == 0 {
                 break;
@@ -113,7 +130,7 @@ pub fn from_config(config: &Config) -> Option<ContentStore> {
 
     config.text.as_deref().map(|text| {
         ContentStore::new(TileContent {
-            markup: build_markup(&format, &icon, text, base_px),
+            markup: build_markup(&template, &icon, &parse_data(text), base_px),
         })
     })
 }
@@ -131,20 +148,39 @@ fn run_command(cmd: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_markup, ContentStore, TileContent};
+    use super::{build_markup, parse_data, ContentStore, TileContent};
 
     #[test]
-    fn build_markup_substitutes_escapes_and_prefixes_icon() {
-        // Value is escaped into the (markup) template.
-        assert_eq!(build_markup("{}", &None, "a&b", 30.0), "a&amp;b");
-        // Template markup is preserved around the escaped value.
-        assert_eq!(build_markup("<b>{}</b>", &None, "x", 30.0), "<b>x</b>");
-        // Icon glyph is prepended as a (centered) span, body follows.
-        let with_icon = build_markup("{}", &Some("I".into()), "x", 30.0);
+    fn build_markup_binds_data_and_prefixes_icon() {
+        use serde_json::json;
+        // Scalar value bound via {{ value }}, escaped.
+        assert_eq!(
+            build_markup("{{ value }}", &None, &json!("a&b"), 30.0),
+            "a&amp;b"
+        );
+        // Object field bound; literal markup preserved.
+        assert_eq!(
+            build_markup("<b>{{ n }}</b>", &None, &json!({ "n": 42 }), 30.0),
+            "<b>42</b>"
+        );
+        // Icon glyph prepended as a (centered) span, body follows.
+        let with_icon = build_markup("{{ value }}", &Some("I".into()), &json!("x"), 30.0);
         assert!(with_icon.contains("<span"), "icon wrapped: {with_icon}");
         assert!(with_icon.ends_with("x"), "body follows icon: {with_icon}");
         // Empty icon is ignored.
-        assert_eq!(build_markup("{}", &Some(String::new()), "x", 30.0), "x");
+        assert_eq!(
+            build_markup("{{ value }}", &Some(String::new()), &json!("x"), 30.0),
+            "x"
+        );
+    }
+
+    #[test]
+    fn parse_data_json_or_plain() {
+        assert!(parse_data(r#"{"a":1}"#).is_object());
+        assert_eq!(
+            parse_data("hello"),
+            serde_json::Value::String("hello".into())
+        );
     }
 
     #[test]

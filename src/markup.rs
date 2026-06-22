@@ -6,7 +6,10 @@
 //! tags become [`EffectSpan`]s our own renderers handle, while their inner text
 //! still flows into the laid-out text so Pango positions it.
 //!
-//! All functions here are pure (no GTK), so they unit-test cleanly.
+//! These functions are GTK-free, so they unit-test cleanly.
+
+use minijinja::{AutoEscape, Environment};
+use serde_json::Value;
 
 /// A custom (non-Pango) tag, covering a byte range of the laid-out plain text
 /// (offsets into [`Processed::plain`], which matches Pango's layout text).
@@ -29,17 +32,32 @@ pub struct Processed {
     pub effects: Vec<EffectSpan>,
 }
 
-/// Escape `&`, `<`, `>` for safe insertion into Pango markup.
+/// Escape for safe insertion into Pango markup — text *and* attribute values
+/// (hence quotes too).
 pub fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
-/// Substitute `{}` in `format` with `value`. The value is escaped so command
-/// output can't inject markup; the `format` template itself is treated as markup.
-pub fn apply_format(format: &str, value: &str) -> String {
-    format.replace("{}", &escape(value))
+/// Render a tile `template` (Jinja-ish: `{{ expr }}`, `{% if %}`, filters)
+/// against the JSON `data`, producing a Pango-markup string. Bound values are
+/// HTML/XML-autoescaped, so they're safe in markup text and attributes alike,
+/// while the template's own markup is left intact.
+///
+/// A JSON object exposes its fields at the top level (`{{ host }}`,
+/// `{{ cpu.pct }}`); any non-object value (e.g. a plain-text command's output)
+/// is available as `{{ value }}`.
+pub fn render_template(template: &str, data: &Value) -> Result<String, minijinja::Error> {
+    let mut env = Environment::new();
+    env.set_auto_escape_callback(|_| AutoEscape::Html);
+    if data.is_object() {
+        env.render_str(template, data)
+    } else {
+        env.render_str(template, minijinja::context! { value => data })
+    }
 }
 
 /// Pango units per device pixel (a stable Pango constant).
@@ -134,22 +152,46 @@ mod tests {
     fn escape_special_chars() {
         assert_eq!(escape("a & b < c > d"), "a &amp; b &lt; c &gt; d");
         assert_eq!(escape("plain"), "plain");
-        assert_eq!(escape("&<>"), "&amp;&lt;&gt;");
+        // Quotes too, so values are safe inside attributes.
+        assert_eq!(escape(r#"q"' "#), "q&quot;&#39; ");
     }
 
     #[test]
-    fn apply_format_substitutes_escaped() {
-        assert_eq!(apply_format("v: {}", "a&b"), "v: a&amp;b");
+    fn template_binds_object_fields() {
+        let data = serde_json::json!({ "host": "nas", "cpu": { "pct": 82 } });
+        assert_eq!(render_template("{{ host }}", &data).unwrap(), "nas");
+        assert_eq!(
+            render_template("CPU {{ cpu.pct }}%", &data).unwrap(),
+            "CPU 82%"
+        );
     }
 
     #[test]
-    fn apply_format_no_placeholder() {
-        assert_eq!(apply_format("static", "ignored"), "static");
+    fn template_autoescapes_values_but_not_markup() {
+        let data = serde_json::json!({ "v": "a<b&c" });
+        let out = render_template("<span>{{ v }}</span>", &data).unwrap();
+        // Literal markup preserved; the value's special chars escaped.
+        assert!(
+            out.starts_with("<span>") && out.ends_with("</span>"),
+            "{out}"
+        );
+        assert!(out.contains("a&lt;b&amp;c"), "value escaped: {out}");
+        assert!(!out.contains("a<b"), "raw < must not survive: {out}");
     }
 
     #[test]
-    fn apply_format_multiple_placeholders() {
-        assert_eq!(apply_format("{} and {}", "<x>"), "&lt;x&gt; and &lt;x&gt;");
+    fn template_scalar_is_value_and_conditionals_work() {
+        assert_eq!(
+            render_template("{{ value }}", &serde_json::json!("hi")).unwrap(),
+            "hi"
+        );
+        let data = serde_json::json!({ "n": 9 });
+        assert_eq!(
+            render_template("{% if n >= 5 %}big{% else %}small{% endif %}", &data).unwrap(),
+            "big"
+        );
+        // Missing field renders empty.
+        assert_eq!(render_template("[{{ nope }}]", &data).unwrap(), "[]");
     }
 
     #[test]
