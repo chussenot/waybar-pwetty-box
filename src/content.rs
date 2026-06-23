@@ -12,6 +12,7 @@
 //! widget polls the dirty flag and redraws when it flips.
 
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -180,31 +181,97 @@ pub fn from_config(config: &Config) -> Option<ContentStore> {
 
     if let Some(exec) = config.exec.clone() {
         let store = ContentStore::new(TileContent::default());
-        let interval = config.interval;
         let publish = store.clone();
-        let (template, icon, uniforms) = (template.clone(), icon.clone(), uniforms.clone());
-        // Detached: lives for the process (waybar modules are process-lifetime).
-        thread::spawn(move || loop {
-            let data = parse_data(&run_command(&exec));
-            publish.set(TileContent {
-                markup: build_markup(&template, &icon, &data, base_px),
-                uniforms: build_uniforms(&uniforms, &data),
+        let build = ContentBuilder {
+            template,
+            icon,
+            uniforms,
+            base_px,
+        };
+        if config.stream {
+            // Push mode: one long-lived process, content per stdout line.
+            spawn_stream(exec, publish, build);
+        } else {
+            // Poll mode: re-run on the interval (0 = run once).
+            let interval = config.interval;
+            // Detached: lives for the process (waybar modules are process-lifetime).
+            thread::spawn(move || loop {
+                let data = parse_data(&run_command(&exec));
+                publish.set(build.content(&data));
+                if interval == 0 {
+                    break;
+                }
+                thread::sleep(Duration::from_secs(interval));
             });
-            if interval == 0 {
-                break;
-            }
-            thread::sleep(Duration::from_secs(interval));
-        });
+        }
         return Some(store);
     }
 
     config.text.as_deref().map(|text| {
-        let data = parse_data(text);
-        ContentStore::new(TileContent {
-            markup: build_markup(&template, &icon, &data, base_px),
-            uniforms: build_uniforms(&uniforms, &data),
-        })
+        let build = ContentBuilder {
+            template,
+            icon,
+            uniforms,
+            base_px,
+        };
+        ContentStore::new(build.content(&parse_data(text)))
     })
+}
+
+/// The fixed inputs for turning a data [`Value`] into [`TileContent`] (the
+/// `format` template, optional icon glyph, shader-uniform specs, base text size).
+/// Lets the poll, stream, and static paths share one composition step.
+struct ContentBuilder {
+    template: String,
+    icon: Option<String>,
+    uniforms: HashMap<String, String>,
+    base_px: f64,
+}
+
+impl ContentBuilder {
+    fn content(&self, data: &Value) -> TileContent {
+        TileContent {
+            markup: build_markup(&self.template, &self.icon, data, self.base_px),
+            uniforms: build_uniforms(&self.uniforms, data),
+        }
+    }
+}
+
+/// Streaming `exec`: spawn `cmd` **once** and apply each newline-delimited stdout
+/// line as new content (push), instead of polling on an interval. On EOF/exit we
+/// keep the last content and respawn after [`RESPAWN_BACKOFF`] — so a producer
+/// crash recovers, and a command that exits immediately can't busy-loop. Blank
+/// lines are skipped; a non-JSON line is treated as a plain string value (same as
+/// the poll path), so it never blanks the tile.
+fn spawn_stream(cmd: String, publish: ContentStore, build: ContentBuilder) {
+    /// Minimum delay before respawning an exited streaming command.
+    const RESPAWN_BACKOFF: Duration = Duration::from_secs(1);
+    // Detached: lives for the process (waybar modules are process-lifetime).
+    thread::spawn(move || loop {
+        match std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(out) = child.stdout.take() {
+                    for line in BufReader::new(out).lines() {
+                        let Ok(line) = line else { break };
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        publish.set(build.content(&parse_data(&line)));
+                    }
+                }
+                let _ = child.wait();
+            }
+            Err(e) => eprintln!("pwetty-box: cannot spawn stream exec '{cmd}': {e}"),
+        }
+        // EOF / exit / spawn failure: keep last content, back off, respawn.
+        thread::sleep(RESPAWN_BACKOFF);
+    });
 }
 
 /// Run `cmd` via `sh -c` and return its trimmed stdout (empty on failure).
@@ -279,5 +346,28 @@ mod tests {
         let get = |n: &str| u.iter().find(|(k, _)| k == n).map(|(_, v)| *v);
         assert_eq!(get("u_load"), Some(95.0));
         assert_eq!(get("u_hot"), Some(1.0)); // bool true -> 1.0
+    }
+
+    #[test]
+    fn stream_exec_pushes_each_line_as_content() {
+        use crate::config::Config;
+        use std::time::{Duration, Instant};
+        // A streaming command that emits two JSON lines then exits. Each line
+        // should become tile content as it arrives (push), not after an interval.
+        let store = super::from_config(&Config {
+            exec: Some(r#"printf '{"value":"one"}\n{"value":"two"}\n'"#.into()),
+            stream: true,
+            format: Some("{{ value }}".into()),
+            font_size: 14.0,
+            ..Default::default()
+        })
+        .expect("exec source yields a store");
+
+        // Poll the dirty-flag content until the last line lands (or time out).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while store.markup() != "two" && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(store.markup(), "two", "stream applied the latest line");
     }
 }

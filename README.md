@@ -60,7 +60,8 @@ All keys live inside the `cffi/pwetty` block (parsed by `src/config.rs`):
 | `fps` | `60` | Animation framerate; `0` = static/content-driven (redraw only when content changes). |
 | `text` | _(unset)_ | Static data for the template. Use for fixed content. |
 | `exec` | _(unset)_ | Shell command; its stdout is the tile's **data** (JSON if parseable, else plain text). |
-| `interval` | `0` | Re-run cadence for `exec`, in seconds (`0` = run once). |
+| `interval` | `0` | Re-run cadence for `exec`, in seconds (`0` = run once). Ignored when `stream` is set. |
+| `stream` | `false` | **Push mode** for `exec`: spawn the command **once** and treat each newline-delimited stdout line as fresh data (sub-150ms repaint), instead of polling on `interval`. The command stays alive and prints one JSON object per line whenever data changes; on EOF/exit the last content is kept and the command respawns after a ~1s backoff. Use for event-driven sources (e.g. a niri desktop-switch watcher) that need to update faster than a poll. |
 | `icon` | _(unset)_ | Glyph prepended to the content, sized + vertically centered on the text. |
 | `format` | `"{{ value }}"` | **Template** ([minijinja](https://github.com/mitsuhiko/minijinja)) rendered against the data → a Pango-markup string. See below. |
 | `font_size` | `14.0` | Base text size in pixels (per-span sizes via markup override it). |

@@ -31,6 +31,23 @@ module's own keys win:
 Override any preset field inline (e.g. `"width": 360`). To iterate on the visual
 without rebuilding, point at a file instead: `"tile_file": "/path/tile.json"`.
 
+**For a snappy active-desktop highlight, use push mode.** Polling has a 1s floor,
+so the `active` card lags on a niri desktop switch. Set `"stream": true` and keep
+your producer alive, emitting one JSON line per change — pwetty repaints within
+~150ms of each line (no `interval` needed):
+
+```jsonc
+"cffi/pwetty#claude5": {
+  "module_path": ".../libpwetty_box.so",
+  "tile": "claude",
+  "stream": true,                 // <- push, not poll
+  "exec": "claude-tile-watch 5"   // <- long-lived: prints a JSON line on every change
+}
+```
+
+On EOF/exit pwetty keeps the last content and respawns after ~1s; blank lines are
+skipped. (Omit `stream` for the simple poll path — set `interval` instead.)
+
 ## The data contract
 
 The `exec` stdout (or static `text`) must be a JSON object matching

@@ -47,6 +47,12 @@ pub struct Config {
     pub exec: Option<String>,
     /// Re-run cadence for `exec`, in seconds. `0` runs it once.
     pub interval: u64,
+    /// Streaming `exec` mode (push, not poll). When `true`, the command is
+    /// spawned **once** and each newline-delimited stdout line becomes new tile
+    /// content immediately (sub-150ms repaint), instead of re-running every
+    /// `interval` seconds. `interval` is ignored. On EOF/exit the last content is
+    /// kept and the command respawns after a short backoff. Default `false`.
+    pub stream: bool,
     /// Static icon glyph (e.g. a Nerd Font character), drawn before the text.
     pub icon: Option<String>,
     /// Tile template (minijinja) rendered against the data into Pango markup.
@@ -147,6 +153,7 @@ impl Default for Config {
             text: None,
             exec: None,
             interval: 0,
+            stream: false,
             icon: None,
             format: None,
             background_shader: None,
@@ -210,6 +217,15 @@ mod tests {
         assert_eq!(c.fps, 60);
         assert!(c.font_path.is_none());
         assert!(c.background.is_none());
+    }
+
+    #[test]
+    fn stream_flag_parses_and_defaults_false() {
+        let c: Config = serde_json::from_str(r#"{ "exec": "x", "stream": true }"#).unwrap();
+        assert!(c.stream);
+        // Absent -> false (poll mode), the conservative default.
+        let d: Config = serde_json::from_str(r#"{ "exec": "x" }"#).unwrap();
+        assert!(!d.stream);
     }
 
     #[test]
