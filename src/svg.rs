@@ -13,6 +13,7 @@ use resvg::usvg::{Options, Tree};
 /// are monochrome silhouettes meant to be tinted; pass `color` on `<icon>` to
 /// colour them. App logos and other artwork come via `<icon src="path">`.
 pub const BUNDLED: &[(&str, &str)] = &[
+    ("claude-face", include_str!("../icons/claude-face.svg")),
     ("folder", include_str!("../icons/folder.svg")),
     ("check", include_str!("../icons/check.svg")),
     ("arrow-up", include_str!("../icons/arrow-up.svg")),

@@ -715,6 +715,7 @@ fn draw_flow(
                             cap_h,
                             &style.font_family,
                             time,
+                            scale,
                         ),
                         "icon" => {
                             let isz = cap_h * icon_size(&embed.attrs);
@@ -768,6 +769,7 @@ fn set_hex(cr: &gtk::cairo::Context, hex: &str, alpha_mul: f64) {
 /// the line mid-line `cy` at slot centre `cx`. States: blinking orange dot
 /// (`working`), pulsing cyan dot (`shell`), a bright `?` over a yellow bloom
 /// (`prompt`), or a static two-cell fade bar (`idle`).
+#[allow(clippy::too_many_arguments)]
 fn draw_status(
     cr: &gtk::cairo::Context,
     attrs: &[(String, String)],
@@ -776,27 +778,27 @@ fn draw_status(
     cap_h: f64,
     family: &str,
     time: f32,
+    scale: f64,
 ) {
     if cap_h < 1.0 {
         return;
     }
     let state = attr(attrs, "state").unwrap_or("idle");
-    // A dot whose diameter equals the digit's rendered cap height — same height,
-    // top and bottom aligned with the number beside it.
     let r = cap_h * 0.5;
     match state {
         // Slow, deep blink/pulse (wide amplitude) — a "bursting bubble", not a
-        // twitch: a moderate color-matched glow swells under the vivid dot, both
-        // riding the same oscillation. Electric hues, punchier than the daemon's.
+        // twitch: a color-matched glow swells under the iconic Claude robot face,
+        // both riding the same oscillation. Electric hues; the colour codes the
+        // state (orange = working, cyan = shell).
         "working" => {
             let a = osc(time, 2.0, 0.15);
             glow_halo(cr, cx, cy, cap_h * 1.1, "#ff5a14", a * 0.5);
-            fill_circle(cr, cx, cy, r, "#ff5a14", a);
+            draw_status_face(cr, cx, cy, cap_h * 1.18, "#ff5a14", a, scale);
         }
         "shell" => {
             let a = osc(time, 2.8, 0.25);
-            glow_halo(cr, cx, cy, cap_h * 0.95, "#12f5ff", a * 0.4);
-            fill_circle(cr, cx, cy, r, "#12f5ff", a);
+            glow_halo(cr, cx, cy, cap_h * 1.05, "#12f5ff", a * 0.4);
+            draw_status_face(cr, cx, cy, cap_h * 1.18, "#12f5ff", a, scale);
         }
         // A bright `?` (drawn at the digit's scale, centered) over a visible
         // yellow bloom. The blink comes from the whole-tile `<pulse>`.
@@ -883,23 +885,12 @@ fn draw_icon(
     let tint = attr(attrs, "color")
         .and_then(render::parse_hex_color)
         .map(|c| (c.r, c.g, c.b));
-    let tint_key = tint.map(|(r, g, b)| {
-        ((r * 255.0) as u32) << 16 | ((g * 255.0) as u32) << 8 | (b * 255.0) as u32
-    });
     let px = ((cap_h * scale).round() as u32).max(1);
 
-    let buf = ICON_CACHE.with(|c| {
-        c.borrow_mut()
-            .entry((key, px, tint_key))
-            .or_insert_with(|| {
-                let bytes: Option<Vec<u8>> = match (name, src) {
-                    (Some(n), _) => svg::bundled(n).map(|s| s.as_bytes().to_vec()),
-                    (_, Some(s)) => std::fs::read(s).ok(),
-                    _ => None,
-                };
-                bytes.and_then(|b| svg::rasterize_argb32(&b, px, tint))
-            })
-            .clone()
+    let buf = raster_svg_cached(key, px, tint, || match (name, src) {
+        (Some(n), _) => svg::bundled(n).map(|s| s.as_bytes().to_vec()),
+        (_, Some(s)) => std::fs::read(s).ok(),
+        _ => None,
     });
     if let Some(buf) = buf {
         paint_argb32_at(
@@ -910,6 +901,7 @@ fn draw_icon(
             scale,
             cx - cap_h / 2.0,
             cy - cap_h / 2.0,
+            1.0,
         );
     }
 }
@@ -917,6 +909,7 @@ fn draw_icon(
 /// Composite an already-ARGB32 (premultiplied, BGRA byte order) buffer at logical
 /// `(ox, oy)`, scaling device pixels back to logical. Like [`paint_rgba_at`] but
 /// for data that's already in Cairo's format (e.g. SVG raster, tiny-skia).
+#[allow(clippy::too_many_arguments)]
 fn paint_argb32_at(
     cr: &gtk::cairo::Context,
     w: usize,
@@ -925,6 +918,7 @@ fn paint_argb32_at(
     device_scale: f64,
     ox: f64,
     oy: f64,
+    alpha: f64,
 ) {
     use gtk::cairo::{Format, ImageSurface};
     let stride = 4 * w as i32;
@@ -938,17 +932,58 @@ fn paint_argb32_at(
     let s = 1.0 / device_scale;
     cr.scale(s, s);
     if cr.set_source_surface(&surface, 0.0, 0.0).is_ok() {
-        let _ = cr.paint();
+        let _ = cr.paint_with_alpha(alpha);
     }
     let _ = cr.restore();
 }
 
-/// Fill a circle of `hex` colour at `(cx, cy)` with the given alpha multiplier.
-fn fill_circle(cr: &gtk::cairo::Context, cx: f64, cy: f64, r: f64, hex: &str, alpha: f64) {
-    set_hex(cr, hex, alpha);
-    cr.new_sub_path(); // detach from any leftover current point (else arc() connects)
-    cr.arc(cx, cy, r, 0.0, std::f64::consts::TAU);
-    let _ = cr.fill();
+/// Rasterize `key`'s SVG to a `px` square, optionally `tint`ed, cached by
+/// (key, px, tint). `load` supplies the SVG bytes on a cache miss.
+fn raster_svg_cached(
+    key: String,
+    px: u32,
+    tint: Option<(f32, f32, f32)>,
+    load: impl FnOnce() -> Option<Vec<u8>>,
+) -> Option<Vec<u8>> {
+    let tint_key = tint.map(|(r, g, b)| {
+        ((r * 255.0) as u32) << 16 | ((g * 255.0) as u32) << 8 | (b * 255.0) as u32
+    });
+    ICON_CACHE.with(|c| {
+        c.borrow_mut()
+            .entry((key, px, tint_key))
+            .or_insert_with(|| load().and_then(|b| svg::rasterize_argb32(&b, px, tint)))
+            .clone()
+    })
+}
+
+/// Draw the bundled `claude-face` icon, tinted to `hex`, sized `size` and
+/// centered at `(cx, cy)`, composited at `alpha` (so it blinks/pulses with the
+/// status oscillation). Rasterized at device resolution and cached.
+fn draw_status_face(
+    cr: &gtk::cairo::Context,
+    cx: f64,
+    cy: f64,
+    size: f64,
+    hex: &str,
+    alpha: f64,
+    scale: f64,
+) {
+    let px = ((size * scale).round() as u32).max(1);
+    let tint = render::parse_hex_color(hex).map(|c| (c.r, c.g, c.b));
+    if let Some(buf) = raster_svg_cached("name:claude-face".to_string(), px, tint, || {
+        svg::bundled("claude-face").map(|s| s.as_bytes().to_vec())
+    }) {
+        paint_argb32_at(
+            cr,
+            px as usize,
+            px as usize,
+            buf,
+            scale,
+            cx - size / 2.0,
+            cy - size / 2.0,
+            alpha,
+        );
+    }
 }
 
 /// Paint a soft radial bloom of `hex` (peak `alpha` at the centre, fading to 0 at
