@@ -678,7 +678,7 @@ fn draw_flow(
     // Top-align the block (a small, tile-independent top pad) so every tile's
     // header sits on the same line regardless of how many wrapped lines follow.
     // (Tall content that exceeds the tile just starts at the pad and clips.)
-    let top_pad = config.font_size as f64 * 0.62;
+    let top_pad = config.font_size as f64 * 0.5;
     let mut y = top_pad;
 
     // Draw the deferred hero icon, centered on the content block (clamped to stay
@@ -1118,14 +1118,14 @@ fn draw_idle_cells(cr: &gtk::cairo::Context, cx: f64, cap_cy: f64, cap_h: f64, h
 /// (no animation, so idle tiles stay cheap). A scalable face is used for the arc
 /// (bitmap faces don't rotate cleanly), so it reads even at small sizes.
 fn draw_idle_badge(cr: &gtk::cairo::Context, cx: f64, cy: f64, cap_h: f64, hex: &str, ago: &str) {
-    use std::f64::consts::FRAC_PI_2;
-
-    // Slightly smaller, lowered cells so the arc has headroom above them.
+    // The decay cells stay full-size and centred on the line (so the indicator
+    // lines up with the digit/folder), nudged down just enough to free a band
+    // above them for the time.
     let bar_h = cap_h * 0.62;
-    let bar_cy = cy + cap_h * 0.24;
+    let bar_cy = cy + cap_h * 0.06; // centred on the line (matches the digit), bare nudge
     draw_idle_cells(cr, cx, bar_cy, bar_h, hex);
 
-    let fs = cap_h * 0.50;
+    let fs = cap_h * 0.60;
     if fs < 4.0 || ago.is_empty() {
         return;
     }
@@ -1149,28 +1149,35 @@ fn draw_idle_badge(cr: &gtk::cairo::Context, cx: f64, cy: f64, cap_h: f64, hex: 
         .collect();
     let arc_len: f64 = advances.iter().sum();
 
-    // Radius: just clear of the cells. The baseline rides the arc; glyphs grow
-    // outward, so the text sits above the bars without overlapping them.
-    let r = bar_h * 0.5 + fs * 0.95;
-    let total_ang = arc_len / r; // angle subtended by the whole string
-                                 // Centre the span over the top of the circle (top = -PI/2 in Cairo's y-down).
-    let mut ang = -FRAC_PI_2 - total_ang / 2.0;
+    // A GENTLE arc (large radius => low curvature => legible, not a cramped
+    // "crown"), curving up over the bars. The radius is tuned for a tasteful
+    // smile; a small radius would crowd/illegible-ize the glyphs at tile scale.
+    let r = (cap_h * 1.5).max(arc_len * 0.9);
+    let half = arc_len / 2.0;
+    // The arch's edge glyphs dip below the apex by `sag`; place the apex so those
+    // lowest glyphs clear the bars by a small gap, and keep the apex's glyph tops
+    // inside the tile. This is what stops the time from grazing the cells.
+    let sag = r * (1.0 - (half / r).cos());
+    let bar_top = bar_cy - bar_h / 2.0;
+    let apex_y = (bar_top - fs * 0.16 - sag).max(fs * 0.72);
+    let center_y = apex_y + r; // arc centre far below -> only the gentle top shows
 
+    let mut s = -half; // arc-length position, 0 = apex (top, upright)
     for (glyph, adv) in chars.iter().zip(&advances) {
-        let mid = ang + (adv / r) / 2.0; // angular centre of this glyph
-                                         // K-2000 sweep: hottest at the top centre, dimming toward the edges.
-        let t = 1.0 - (mid + FRAC_PI_2).abs() / (total_ang / 2.0 + 1e-3);
-        let t = t.clamp(0.0, 1.0);
-        let red = 0.62 + 0.38 * t; // mild: deep red -> brighter red at centre
+        let mid = s + adv / 2.0;
+        let a = mid / r; // angle from the apex
+                         // K-2000 sweep: hottest at the centre, dimming toward the edges.
+        let t = (1.0 - mid.abs() / (half + 1e-3)).clamp(0.0, 1.0);
+        let red = 0.62 + 0.38 * t;
         let gb = 0.14 + 0.22 * t;
         cr.save().ok();
-        cr.translate(cx + r * mid.cos(), bar_cy + r * mid.sin());
-        cr.rotate(mid + FRAC_PI_2); // tangent: upright at the top, tilting at edges
+        cr.translate(cx + r * a.sin(), center_y - r * a.cos());
+        cr.rotate(a); // tangent: upright at apex, tilting gently at the edges
         cr.set_source_rgb(red, gb, gb);
         cr.move_to(-adv / 2.0, fs * 0.34); // centre the glyph on the arc point
         let _ = cr.show_text(glyph);
         cr.restore().ok();
-        ang += adv / r;
+        s += adv;
     }
     cr.restore().ok();
 }
