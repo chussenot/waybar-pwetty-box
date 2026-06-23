@@ -626,18 +626,20 @@ fn draw_flow(
     let center = config.align.as_deref() == Some("center");
     let lines = flow_layout(&processed.markup);
 
-    // A leading `<icon hero/>` becomes a big left gutter (sized by tile height,
-    // centered on the tile); the text lines indent past it. Lets a window tile
-    // show a prominent app icon with the header + wrapped title to its right.
+    // A leading `<icon hero/>` becomes a big left gutter; the text lines indent
+    // past it. Lets a window tile show a prominent app icon with the header +
+    // wrapped title to its right. Detected here (so `left` feeds the wrap width)
+    // but drawn after the block height is known, so it centers on the content.
     let mut left = pad;
     let mut hero = false;
+    let mut hero_draw: Option<(&markup::Embed, f64)> = None;
     if let Some(FlowItem::Embed(idx)) = lines.first().and_then(|l| l.first()) {
         if let Some(e) = processed.embeds.get(*idx) {
             if e.tag == "icon" && attr(&e.attrs, "hero").is_some() {
                 let hero_h = h * 0.7;
-                draw_icon(cr, &e.attrs, pad + hero_h / 2.0, h / 2.0, hero_h, scale);
                 left = pad + hero_h + config.font_size as f64 * 0.5;
                 hero = true;
+                hero_draw = Some((e, hero_h));
             }
         }
     }
@@ -667,7 +669,18 @@ fn draw_flow(
         }
     }
     let total: f64 = heights.iter().sum();
-    let mut y = ((h - total) / 2.0).max(0.0);
+    // Top-align the block (a small, tile-independent top pad) so every tile's
+    // header sits on the same line regardless of how many wrapped lines follow.
+    // (Tall content that exceeds the tile just starts at the pad and clips.)
+    let top_pad = config.font_size as f64 * 0.4;
+    let mut y = top_pad;
+
+    // Draw the deferred hero icon, centered on the content block (clamped to stay
+    // within the tile) so it reads as part of the now top-aligned content.
+    if let Some((e, hero_h)) = hero_draw {
+        let cy = (top_pad + total / 2.0).clamp(hero_h / 2.0, h - hero_h / 2.0);
+        draw_icon(cr, &e.attrs, pad + hero_h / 2.0, cy, hero_h, scale);
+    }
 
     for (li, items) in lines.iter().enumerate() {
         let lh = heights[li];
