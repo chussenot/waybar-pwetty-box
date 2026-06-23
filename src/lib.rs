@@ -596,7 +596,13 @@ fn cap_at(laid: &[Option<Run>], before: usize, line_h: f64) -> f64 {
 /// Reserved advance width for an embed of `tag`.
 fn embed_ew(tag: &str, attrs: &[(String, String)], cap_h: f64) -> f64 {
     match tag {
-        "status" => embed_width(attrs, cap_h * 1.7),
+        // An idle badge carrying an `ago` time needs extra width for the arc
+        // that circles the bars; a plain status (dot/face/cells) is narrower.
+        "status" => {
+            let idle_ago = attr(attrs, "state") == Some("idle")
+                && attr(attrs, "ago").is_some_and(|s| !s.is_empty());
+            embed_width(attrs, cap_h * if idle_ago { 2.4 } else { 1.7 })
+        }
         "icon" => embed_width(attrs, cap_h * icon_size(attrs) + cap_h * 0.3),
         "tickerbox" => embed_width(attrs, 160.0),
         "sep" => embed_width(attrs, cap_h * 0.4), // thin run-splitting spacer
@@ -622,7 +628,7 @@ fn draw_flow(
     scale: f64,
 ) {
     let line_h = config.font_size as f64 * 1.4;
-    let pad = config.font_size as f64 * 0.5; // left pad, width-agnostic
+    let pad = config.font_size as f64 * 0.8; // L/R pad — also the active card's inner margin
     let center = config.align.as_deref() == Some("center");
     let lines = flow_layout(&processed.markup);
 
@@ -672,7 +678,7 @@ fn draw_flow(
     // Top-align the block (a small, tile-independent top pad) so every tile's
     // header sits on the same line regardless of how many wrapped lines follow.
     // (Tall content that exceeds the tile just starts at the pad and clips.)
-    let top_pad = config.font_size as f64 * 0.4;
+    let top_pad = config.font_size as f64 * 0.62;
     let mut y = top_pad;
 
     // Draw the deferred hero icon, centered on the content block (clamped to stay
@@ -863,7 +869,12 @@ fn draw_status(
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(0)
                 .min(IDLE_LEVELS.len() - 1);
-            draw_idle_cells(cr, cx, cy, cap_h, IDLE_LEVELS[level]);
+            let ago = attr(attrs, "ago").unwrap_or("");
+            if ago.is_empty() {
+                draw_idle_cells(cr, cx, cy, cap_h, IDLE_LEVELS[level]);
+            } else {
+                draw_idle_badge(cr, cx, cy, cap_h, IDLE_LEVELS[level], ago);
+            }
         }
         // An empty desktop: a dim hollow ring (no activity), digit-sized.
         "empty" => draw_ring(cr, cx, cy, r, "#6c7086"),
@@ -1098,6 +1109,70 @@ fn draw_idle_cells(cr: &gtk::cairo::Context, cx: f64, cap_cy: f64, cap_h: f64, h
     let _ = cr.fill();
     rounded_rect(cr, x0 + cw + gap, y0, cw, cap_h, cw * 0.3);
     let _ = cr.fill();
+}
+
+/// Draw the idle indicator as a **badge**: the two decay cells with the
+/// "time since active" (`ago`, e.g. `12m`) set on an arc that circles over the
+/// top of them. The arc text carries a mild, *static* Knight-Rider (K-2000) red
+/// gradient — brightest at the centre of the sweep, dimming to the edges — frozen
+/// (no animation, so idle tiles stay cheap). A scalable face is used for the arc
+/// (bitmap faces don't rotate cleanly), so it reads even at small sizes.
+fn draw_idle_badge(cr: &gtk::cairo::Context, cx: f64, cy: f64, cap_h: f64, hex: &str, ago: &str) {
+    use std::f64::consts::FRAC_PI_2;
+
+    // Slightly smaller, lowered cells so the arc has headroom above them.
+    let bar_h = cap_h * 0.62;
+    let bar_cy = cy + cap_h * 0.24;
+    draw_idle_cells(cr, cx, bar_cy, bar_h, hex);
+
+    let fs = cap_h * 0.50;
+    if fs < 4.0 || ago.is_empty() {
+        return;
+    }
+    cr.save().ok();
+    cr.select_font_face(
+        "monospace",
+        gtk::cairo::FontSlant::Normal,
+        gtk::cairo::FontWeight::Bold,
+    );
+    cr.set_font_size(fs);
+
+    // Per-glyph advances, so the string is distributed by real width on the arc.
+    let chars: Vec<String> = ago.chars().map(|c| c.to_string()).collect();
+    let advances: Vec<f64> = chars
+        .iter()
+        .map(|c| {
+            cr.text_extents(c)
+                .map(|e| e.x_advance())
+                .unwrap_or(fs * 0.6)
+        })
+        .collect();
+    let arc_len: f64 = advances.iter().sum();
+
+    // Radius: just clear of the cells. The baseline rides the arc; glyphs grow
+    // outward, so the text sits above the bars without overlapping them.
+    let r = bar_h * 0.5 + fs * 0.95;
+    let total_ang = arc_len / r; // angle subtended by the whole string
+                                 // Centre the span over the top of the circle (top = -PI/2 in Cairo's y-down).
+    let mut ang = -FRAC_PI_2 - total_ang / 2.0;
+
+    for (glyph, adv) in chars.iter().zip(&advances) {
+        let mid = ang + (adv / r) / 2.0; // angular centre of this glyph
+                                         // K-2000 sweep: hottest at the top centre, dimming toward the edges.
+        let t = 1.0 - (mid + FRAC_PI_2).abs() / (total_ang / 2.0 + 1e-3);
+        let t = t.clamp(0.0, 1.0);
+        let red = 0.62 + 0.38 * t; // mild: deep red -> brighter red at centre
+        let gb = 0.14 + 0.22 * t;
+        cr.save().ok();
+        cr.translate(cx + r * mid.cos(), bar_cy + r * mid.sin());
+        cr.rotate(mid + FRAC_PI_2); // tangent: upright at the top, tilting at edges
+        cr.set_source_rgb(red, gb, gb);
+        cr.move_to(-adv / 2.0, fs * 0.34); // centre the glyph on the arc point
+        let _ = cr.show_text(glyph);
+        cr.restore().ok();
+        ang += adv / r;
+    }
+    cr.restore().ok();
 }
 
 /// Opaque white femtovg colour (fallback for an unparsable hex).

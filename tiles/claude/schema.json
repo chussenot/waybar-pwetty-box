@@ -43,7 +43,7 @@
     },
     "idle_ago": {
       "type": "string",
-      "description": "REAL-derived (from last_talk_ts). Pre-formatted 'time since active' shown only when state=idle, e.g. '12m' or '2h' (rendered as '12m ago'). You format the string.",
+      "description": "REAL-derived (from last_talk_ts). Pre-formatted 'time since active' shown only when state=idle, e.g. '12m' or '2h'. Rendered on an arc that circles over the idle bars (a compact badge), tinted a mild static K-2000 red — so keep it short (the 'ago' is implied). You format the string.",
       "examples": ["12m", "2h"]
     },
     "folder": {

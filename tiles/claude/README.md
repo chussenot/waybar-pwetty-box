@@ -60,8 +60,8 @@ The `exec` stdout (or static `text`) must be a JSON object matching
 | `idle_level` | integer 0–6     | REAL-derived | only used when `state=idle`; 0=just-idled (white) → 6=>60min (dim) |
 | `folder`     | string          | REAL   | basename of the session `cwd` |
 | `title`      | string          | MOCK   | window title; word-wrapped on line 2 (static) |
-| `unpushed`   | integer         | MOCK   | unpushed commit count; shown as `↑N` after the folder, hidden when 0 or when idle (idle shows `idle_ago` instead) |
-| `idle_ago`   | string          | REAL-derived | when `state=idle`: "time since active", e.g. `12m` (shown as `12m ago`) |
+| `unpushed`   | integer         | MOCK   | unpushed commit count; shown as `↑N` after the folder, hidden when 0 or when idle |
+| `idle_ago`   | string          | REAL-derived | when `state=idle`: "time since active", e.g. `12m`; rendered on an arc circling the idle bars (mild K-2000 red). Keep it short. |
 | `active`     | boolean         | niri   | focused desktop → an accent "card" (fill + border) so it stands out |
 | `is_claude`  | boolean         | derive | `true` → the status/folder layout; `false` → the app-icon layout (below) |
 | `app`        | string          | window | `is_claude=false` only: the app/window label |
@@ -80,8 +80,9 @@ The indicator: `working` → the **Claude mascot** in deep orange, slow blink +
 color-matched glow; `prompt` → a blinking yellow `?` (and the *whole tile*
 pulses, to pull your eye); `shell` → the **Claude mascot** in electric cyan,
 pulsing + glow; `idle` → a static two-cell bar that fades white→grey with
-`idle_level`. (Idle/empty tiles are fully static — they don't repaint, keeping
-the bar cool; only `working`/`prompt`/`shell` animate.)
+`idle_level`, with `idle_ago` (e.g. `12m`) set on an arc circling over the bars
+in a mild K-2000 red. (Idle/empty tiles are fully static — they don't repaint,
+keeping the bar cool; only `working`/`prompt`/`shell` animate.)
 
 ## Inspecting / previewing
 
