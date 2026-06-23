@@ -385,8 +385,11 @@ fn paint_rgba_at(
 
 /// Custom effect tags (decorations drawn behind a span).
 const EFFECT_TAGS: &[&str] = &["box", "glow"];
-/// Inline embed tags (sized elements placed in the text flow).
-const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon"];
+/// Inline embed tags (sized elements placed in the text flow). `sep` is a thin
+/// spacer that draws nothing — its purpose is to *split a text run*, so adjacent
+/// differently-sized spans each get independently vertically-centered (a single
+/// Pango run would baseline-align them instead).
+const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon", "sep"];
 
 /// Default redraw rate for auto-animated tiles (blink/pulse/ticker) when the
 /// config doesn't pin `fps`. Below the monitor's 60Hz but smooth (the per-frame
@@ -590,6 +593,7 @@ fn embed_ew(tag: &str, attrs: &[(String, String)], cap_h: f64) -> f64 {
         "status" => embed_width(attrs, cap_h * 1.7),
         "icon" => embed_width(attrs, cap_h * icon_size(attrs) + cap_h * 0.3),
         "tickerbox" => embed_width(attrs, 160.0),
+        "sep" => embed_width(attrs, cap_h * 0.4), // thin run-splitting spacer
         _ => 0.0,
     }
 }
