@@ -238,8 +238,8 @@ impl Module for PwettyBox {
                 DEFAULT_ANIM_FPS
             };
             let min_dt = 1_000_000 / target_fps.max(1) as i64; // microseconds
-            // 0 sentinel (not i64::MIN — `now - i64::MIN` overflows): the first
-            // tick's `now - 0` is huge, so it draws immediately, then throttles.
+                                                               // 0 sentinel (not i64::MIN — `now - i64::MIN` overflows): the first
+                                                               // tick's `now - 0` is huge, so it draws immediately, then throttles.
             let last = std::cell::Cell::new(0i64);
             area.add_tick_callback(move |area, clock| {
                 let now = clock.frame_time();
@@ -505,6 +505,15 @@ fn embed_width(attrs: &[(String, String)], default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+/// An `<icon size="N">` multiplier of the reference cap height (default 1.0).
+/// App logos want to be bigger than a digit, so the window tile sizes them up.
+fn icon_size(attrs: &[(String, String)]) -> f64 {
+    attr(attrs, "size")
+        .and_then(|v| v.parse().ok())
+        .filter(|&s: &f64| s > 0.0)
+        .unwrap_or(1.0)
+}
+
 /// One element of a flow line: a text run, or a reference to an embed (by index
 /// into `Processed::embeds`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -579,7 +588,7 @@ fn cap_at(laid: &[Option<Run>], before: usize, line_h: f64) -> f64 {
 fn embed_ew(tag: &str, attrs: &[(String, String)], cap_h: f64) -> f64 {
     match tag {
         "status" => embed_width(attrs, cap_h * 1.7),
-        "icon" => embed_width(attrs, cap_h * 1.4),
+        "icon" => embed_width(attrs, cap_h * icon_size(attrs) + cap_h * 0.3),
         "tickerbox" => embed_width(attrs, 160.0),
         _ => 0.0,
     }
@@ -682,7 +691,10 @@ fn draw_flow(
                             &style.font_family,
                             time,
                         ),
-                        "icon" => draw_icon(cr, &embed.attrs, x + ew / 2.0, center_y, cap_h, scale),
+                        "icon" => {
+                            let isz = cap_h * icon_size(&embed.attrs);
+                            draw_icon(cr, &embed.attrs, x + ew / 2.0, center_y, isz, scale)
+                        }
                         "tickerbox" => {
                             draw_ticker(cr, &embed.inner, (x, ly, ew, line_h), config, time)
                         }
@@ -764,8 +776,9 @@ fn draw_status(
         // A bright `?` (drawn at the digit's scale, centered) over a visible
         // yellow bloom. The blink comes from the whole-tile `<pulse>`.
         "prompt" => {
-            glow_halo(cr, cx, cy, cap_h * 1.3, "#f9e2af", 0.85);
-            draw_glyph_centered(cr, "?", cx, cy, cap_h, family, "#f9e2af");
+            // Softer halo, but a saturated glyph so the `?` reads crisply on it.
+            glow_halo(cr, cx, cy, cap_h * 1.3, "#f9e2af", 0.55);
+            draw_glyph_centered(cr, "?", cx, cy, cap_h, family, "#ffd42a");
         }
         "idle" => {
             let level = attr(attrs, "level")
