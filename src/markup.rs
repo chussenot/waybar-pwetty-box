@@ -57,12 +57,36 @@ pub struct Processed {
     /// Whether the content contained an `<active/>` marker — this desktop is the
     /// focused one; the renderer draws an accent panel behind the tile.
     pub active: bool,
+    /// A `<bg preset="…" …/>` background-shader layer, if present — a named shader
+    /// preset drawn (masked to the focus bubble, at moderate alpha) behind the
+    /// content. Attributes other than the reserved ones become float uniforms.
+    pub bg: Option<BgSpec>,
+}
+
+/// A `<bg>` background-shader directive: the chosen `preset` plus its raw
+/// attributes (`alpha`, `fade`, and any extra `name="float"` shader uniforms),
+/// resolved by the renderer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BgSpec {
+    pub attrs: Vec<(String, String)>,
+}
+
+impl BgSpec {
+    /// The selected preset name, if any.
+    pub fn preset(&self) -> Option<&str> {
+        self.attrs
+            .iter()
+            .find(|(k, _)| k == "preset")
+            .map(|(_, v)| v.as_str())
+    }
 }
 
 /// Structural tag that flags the whole tile to pulse (see [`Processed::pulse`]).
 pub const PULSE_TAG: &str = "pulse";
 /// Structural marker tag that flags the tile as the active desktop.
 pub const ACTIVE_TAG: &str = "active";
+/// Structural tag selecting a background-shader preset (see [`Processed::bg`]).
+pub const BG_TAG: &str = "bg";
 
 /// Escape for safe insertion into Pango markup — text *and* attribute values
 /// (hence quotes too).
@@ -186,6 +210,12 @@ fn walk_children(
                 // Active-desktop marker: flag it; render any children normally.
                 out.active = true;
                 walk_children(child, effect_tags, embed_tags, out);
+            } else if tag == BG_TAG {
+                // Background-shader directive: capture its attributes; emits no
+                // markup (it's a background layer, not part of the text flow).
+                out.bg = Some(BgSpec {
+                    attrs: collect_attrs(child),
+                });
             } else if tag == PULSE_TAG {
                 // Attention wrapper: flag the tile to pulse; emit no tag of its
                 // own — its children render normally.
@@ -244,6 +274,21 @@ mod tests {
         assert_eq!(escape("plain"), "plain");
         // Quotes too, so values are safe inside attributes.
         assert_eq!(escape(r#"q"' "#), "q&quot;&#39; ");
+    }
+
+    #[test]
+    fn bg_tag_captured_and_emits_no_markup() {
+        let p = process(
+            r#"<bg preset="night" speed="0.3"/><span>hi</span>"#,
+            &["box"],
+            &["tickerbox"],
+        );
+        let bg = p.bg.expect("bg captured");
+        assert_eq!(bg.preset(), Some("night"));
+        assert!(bg.attrs.iter().any(|(k, v)| k == "speed" && v == "0.3"));
+        // The directive itself contributes nothing to the text flow.
+        assert_eq!(p.markup, "<span>hi</span>");
+        assert!(!p.plain.contains("night"));
     }
 
     #[test]

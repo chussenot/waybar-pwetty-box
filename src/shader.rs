@@ -8,6 +8,19 @@ use std::collections::HashMap;
 
 use glow::HasContext;
 
+/// Bundled background-shader presets, selectable via `<bg preset="name"/>`. Each
+/// is Shadertoy-style (`mainImage`), single-pass, texture-free. Compiled lazily
+/// and masked to the focus bubble (see [`wrap_fragment_masked`]).
+pub const PRESETS: &[(&str, &str)] = &[
+    ("night", include_str!("../shaders/night.glsl")),
+    ("caustic", include_str!("../shaders/caustic.glsl")),
+];
+
+/// GLSL source for a named background preset, if it exists.
+pub fn preset(name: &str) -> Option<&'static str> {
+    PRESETS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
+}
+
 /// Built-in soft-glow shader (used by the `<glow color="…">` span effect). A
 /// gently pulsing coloured blob with a soft elliptical falloff; the colour comes
 /// from the `u_r`/`u_g`/`u_b` uniforms.
@@ -45,8 +58,45 @@ impl ShaderCache {
         frame: i32,
         uniforms: &[(String, f32)],
     ) -> Option<Vec<u8>> {
+        self.render_inner(key, src, false, w, h, time, frame, uniforms)
+    }
+
+    /// Like [`render`](Self::render), but compiles with the focus-bubble mask
+    /// wrapper ([`wrap_fragment_masked`]) — for `<bg>` preset backgrounds. The
+    /// `u_bx/u_by/u_bw/u_bh/u_radius/u_fade/u_alpha` uniforms (passed by name in
+    /// `uniforms`) drive the rounded-rect mask + overall opacity.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_masked(
+        &mut self,
+        key: &str,
+        src: &str,
+        w: i32,
+        h: i32,
+        time: f32,
+        frame: i32,
+        uniforms: &[(String, f32)],
+    ) -> Option<Vec<u8>> {
+        self.render_inner(key, src, true, w, h, time, frame, uniforms)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_inner(
+        &mut self,
+        key: &str,
+        src: &str,
+        masked: bool,
+        w: i32,
+        h: i32,
+        time: f32,
+        frame: i32,
+        uniforms: &[(String, f32)],
+    ) -> Option<Vec<u8>> {
         let entry = self.passes.entry(key.to_string()).or_insert_with(|| {
-            let r = ShaderPass::new(src);
+            let r = if masked {
+                ShaderPass::new_masked(src)
+            } else {
+                ShaderPass::new(src)
+            };
             if let Err(e) = &r {
                 eprintln!("pwetty-box: shader '{key}' compile error:\n{e}");
             }
@@ -82,6 +132,38 @@ pub fn wrap_fragment(user: &str) -> String {
     )
 }
 
+/// As [`wrap_fragment`], but multiplies the shader's alpha by a rounded-rect mask
+/// (the focus bubble) and an overall `u_alpha`. The mask is full inside the box
+/// and fades to zero across a `u_fade`-pixel band at the edge, so `<bg>` presets
+/// read as a mild, contained graphical layer rather than a full-bleed background.
+/// Bubble bounds (`u_bx,u_by,u_bw,u_bh`) and `u_radius`/`u_fade` are device px.
+/// Output is straight alpha (premultiplied later by `paint_rgba_at`).
+pub fn wrap_fragment_masked(user: &str) -> String {
+    format!(
+        "#version 300 es\n\
+         precision highp float;\n\
+         uniform vec3 iResolution;\n\
+         uniform float iTime;\n\
+         uniform int iFrame;\n\
+         uniform float u_bx; uniform float u_by; uniform float u_bw; uniform float u_bh;\n\
+         uniform float u_radius; uniform float u_fade; uniform float u_alpha;\n\
+         out vec4 _pwetty_fragColor;\n\
+         {user}\n\
+         float _pw_sdbox(vec2 p, vec2 b, float r) {{\n\
+             vec2 q = abs(p) - b + r;\n\
+             return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;\n\
+         }}\n\
+         void main() {{\n\
+             vec4 c; mainImage(c, gl_FragCoord.xy);\n\
+             vec2 ctr = vec2(u_bx + u_bw * 0.5, u_by + u_bh * 0.5);\n\
+             vec2 hlf = vec2(u_bw * 0.5, u_bh * 0.5);\n\
+             float d = _pw_sdbox(gl_FragCoord.xy - ctr, hlf, u_radius);\n\
+             float mask = clamp(-d / max(u_fade, 1.0), 0.0, 1.0);\n\
+             _pwetty_fragColor = vec4(c.rgb, c.a * u_alpha * mask);\n\
+         }}\n"
+    )
+}
+
 /// A compiled background shader plus its offscreen render target.
 pub struct ShaderPass {
     gl: glow::Context,
@@ -94,10 +176,20 @@ impl ShaderPass {
     /// Compile `user_fragment` (Shadertoy `mainImage`). A GL context must be
     /// current. Returns the shader info log on compile/link failure.
     pub fn new(user_fragment: &str) -> Result<Self, String> {
+        Self::compile(wrap_fragment(user_fragment))
+    }
+
+    /// Like [`new`](Self::new), but with the focus-bubble mask wrapper applied
+    /// (see [`wrap_fragment_masked`]) — for `<bg>` preset backgrounds.
+    pub fn new_masked(user_fragment: &str) -> Result<Self, String> {
+        Self::compile(wrap_fragment_masked(user_fragment))
+    }
+
+    fn compile(fragment: String) -> Result<Self, String> {
         crate::gl::ensure_loaded();
         let gl = unsafe { glow::Context::from_loader_function(crate::gl::proc_addr) };
         unsafe {
-            let program = link(&gl, VERTEX_SRC, &wrap_fragment(user_fragment))?;
+            let program = link(&gl, VERTEX_SRC, &fragment)?;
             let vao = gl.create_vertex_array()?;
             Ok(Self {
                 gl,
@@ -252,7 +344,7 @@ fn flip_rows(buf: &mut [u8], w: usize, h: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::wrap_fragment;
+    use super::{preset, wrap_fragment, wrap_fragment_masked, PRESETS};
 
     #[test]
     fn wrap_adds_boilerplate_and_user_code() {
@@ -262,5 +354,28 @@ mod tests {
         assert!(s.contains("uniform vec3 iResolution;"));
         assert!(s.contains("void mainImage")); // user code present
         assert!(s.contains("mainImage(_pwetty_fragColor, gl_FragCoord.xy)"));
+    }
+
+    #[test]
+    fn masked_wrap_adds_bubble_uniforms_and_mask() {
+        let s = wrap_fragment_masked("void mainImage(out vec4 c, in vec2 p){ c = vec4(1.0); }");
+        assert!(s.starts_with("#version 300 es"));
+        // bubble + alpha uniforms the renderer drives by name
+        for u in ["u_bx", "u_by", "u_bw", "u_bh", "u_radius", "u_fade", "u_alpha"] {
+            assert!(s.contains(u), "missing uniform {u}");
+        }
+        assert!(s.contains("_pw_sdbox")); // rounded-rect mask
+        assert!(s.contains("c.a * u_alpha * mask")); // alpha = shader * overall * mask
+    }
+
+    #[test]
+    fn presets_resolve_by_name() {
+        assert!(preset("night").is_some());
+        assert!(preset("caustic").is_some());
+        assert!(preset("nope").is_none());
+        // every bundled preset defines a mainImage entry point
+        for (name, src) in PRESETS {
+            assert!(src.contains("mainImage"), "{name} has no mainImage");
+        }
     }
 }

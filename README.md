@@ -252,6 +252,28 @@ Each uniform value is a template evaluated against the data (`true`/`false` → 
 otherwise parsed as a float). See `examples/shaders/reactive.glsl` (calm teal →
 intense red as `u_load` rises).
 
+**Mild masked backgrounds — `<bg preset="…"/>`.** Where `background_shader` is a
+full-bleed, opaque background, the `<bg>` markup tag is the *subtle* counterpart:
+a **bundled preset** drawn as a faint translucent layer, **clipped to the focus
+bubble** (the same rounded-rect as the active card) with a **sharp 20px edge
+fade** — a graphical accent for *some* tiles, not a show-off.
+
+```jsonc
+"format": "<bg preset='night'/><span size='xx-large' weight='bold'>{{ shortcut }}</span> …"
+```
+
+- `preset` — a bundled shader (`night` = deep-blue sky + drifting nebula +
+  twinkling stars; `caustic` = night-blue water). Registered in `src/shader.rs`
+  (`shaders/*.glsl`).
+- `alpha` — layer opacity (default `0.28`); `fade` — edge-fade width in px
+  (default `20`).
+- Any other attribute becomes a `float` uniform for the preset, e.g.
+  `<bg preset='night' speed='0.4'/>`.
+
+The mask mirrors the focus bubble exactly (one shared `focus_bubble()`), so it
+lines up with the active-card border. Like any shader it repaints per frame
+(capped at the anim fps), so reach for it on a *few* tiles, not all of them.
+
 ## Architecture / where to extend
 
 ```

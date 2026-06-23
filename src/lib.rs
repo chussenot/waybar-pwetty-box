@@ -167,7 +167,9 @@ impl Module for PwettyBox {
                     // `make_current` entirely — a real per-frame saving that lets
                     // us animate at a higher rate without melting the laptop.
                     let needs_glow = markup.as_deref().is_some_and(|m| m.contains("<glow"));
-                    let needs_gl = !has_content || engine.shader_path.is_some() || needs_glow;
+                    let needs_bg = markup.as_deref().is_some_and(|m| m.contains("<bg"));
+                    let needs_gl =
+                        !has_content || engine.shader_path.is_some() || needs_glow || needs_bg;
 
                     if !needs_gl || engine.gl.make_current().is_ok() {
                         engine.refresh_shader();
@@ -231,7 +233,10 @@ impl Module for PwettyBox {
         let forced = shared.config.fps > 0 || shared.config.background_shader.is_some();
         let could_anim = forced
             || shared.config.format.as_deref().is_some_and(|f| {
-                f.contains("<tickerbox") || f.contains("<status") || f.contains("<pulse")
+                f.contains("<tickerbox")
+                    || f.contains("<status")
+                    || f.contains("<pulse")
+                    || f.contains("<bg")
             });
         if could_anim {
             let target_fps = if shared.config.fps > 0 {
@@ -432,6 +437,12 @@ pub fn draw_content(
         color: (0.95, 0.95, 1.0, 1.0),
         align_center: false,
     };
+
+    // `<bg preset="…">` paints a shader layer (masked to the focus bubble, mild
+    // alpha) as the bottom-most layer — behind the accent card and the content.
+    if let (Some(bg), Some(fx)) = (&processed.bg, fx.as_deref_mut()) {
+        draw_bg(cr, w, h, bg, fx);
+    }
 
     // `<active/>` marks the focused desktop — a steady accent "card" behind the
     // tile (drawn before the pulse group so it doesn't oscillate).
@@ -891,17 +902,22 @@ fn draw_ring(cr: &gtk::cairo::Context, cx: f64, cy: f64, r: f64, hex: &str) {
     let _ = cr.stroke();
 }
 
-/// Draw the active-desktop accent: a rounded "card" — a faint accent fill plus a
-/// brighter accent border — inset within the `w`×`h` tile, behind the content.
-fn draw_active_panel(cr: &gtk::cairo::Context, w: f64, h: f64) {
+/// The "focus bubble": the rounded-rect inset within a `w`×`h` tile, as `(x, y,
+/// w, h, radius)` in logical px. It's the shape of the active-desktop card AND
+/// the mask a `<bg>` shader layer is clipped to — one definition so they always
+/// agree. The rect is centred (equal insets), which lets the shader compute its
+/// mask from `gl_FragCoord` regardless of GL's y-origin.
+fn focus_bubble(w: f64, h: f64) -> (f64, f64, f64, f64, f64) {
     let inset = 2.0;
-    let (x, y, pw, ph) = (
-        inset,
-        inset,
-        (w - 2.0 * inset).max(0.0),
-        (h - 2.0 * inset).max(0.0),
-    );
-    let r = ph * 0.20;
+    let pw = (w - 2.0 * inset).max(0.0);
+    let ph = (h - 2.0 * inset).max(0.0);
+    (inset, inset, pw, ph, ph * 0.20)
+}
+
+/// Draw the active-desktop accent: a rounded "card" — a faint accent fill plus a
+/// brighter accent border — on the focus bubble, behind the content.
+fn draw_active_panel(cr: &gtk::cairo::Context, w: f64, h: f64) {
+    let (x, y, pw, ph, r) = focus_bubble(w, h);
     rounded_rect(cr, x, y, pw, ph, r);
     set_hex(cr, "#89b4fa", 0.12);
     let _ = cr.fill();
@@ -909,6 +925,69 @@ fn draw_active_panel(cr: &gtk::cairo::Context, w: f64, h: f64) {
     set_hex(cr, "#89b4fa", 0.75);
     cr.set_line_width(1.5);
     let _ = cr.stroke();
+}
+
+/// Default opacity of a `<bg>` shader layer — mild by design (a graphical accent,
+/// not a full background). Overridable per-tile with `<bg … alpha="…">`.
+const BG_ALPHA: f32 = 0.28;
+/// Default edge-fade width (logical px) of the `<bg>` focus-bubble mask.
+const BG_FADE: f32 = 20.0;
+
+/// Render a `<bg preset="…">` shader layer, masked to the focus bubble at moderate
+/// alpha, and composite it behind the tile content. Reserved attrs `alpha`/`fade`
+/// tune the mask; any other `name="float"` attr becomes a shader uniform.
+fn draw_bg(cr: &gtk::cairo::Context, w: f64, h: f64, bg: &markup::BgSpec, fx: &mut EffectCtx) {
+    let Some(name) = bg.preset() else { return };
+    let Some(src) = shader::preset(name) else {
+        eprintln!("pwetty-box: unknown bg preset '{name}'");
+        return;
+    };
+    let dw = (w * fx.scale).round() as i32;
+    let dh = (h * fx.scale).round() as i32;
+    if dw <= 0 || dh <= 0 {
+        return;
+    }
+    let s = fx.scale as f32;
+    let (bx, by, bw, bh, r) = focus_bubble(w, h);
+    // Defaults first; per-tile attrs pushed after override by name (last wins in
+    // the GL uniform set).
+    let mut uniforms: Vec<(String, f32)> = vec![
+        ("u_bx".into(), bx as f32 * s),
+        ("u_by".into(), by as f32 * s),
+        ("u_bw".into(), bw as f32 * s),
+        ("u_bh".into(), bh as f32 * s),
+        ("u_radius".into(), r as f32 * s),
+        ("u_fade".into(), BG_FADE * s),
+        ("u_alpha".into(), BG_ALPHA),
+    ];
+    for (k, v) in &bg.attrs {
+        match k.as_str() {
+            "preset" => {}
+            "alpha" => {
+                if let Ok(f) = v.parse() {
+                    uniforms.push(("u_alpha".into(), f));
+                }
+            }
+            "fade" => {
+                if let Ok(f) = v.parse::<f32>() {
+                    uniforms.push(("u_fade".into(), f * s));
+                }
+            }
+            // Any other attribute is a custom float uniform for the preset.
+            _ => {
+                if let Ok(f) = v.parse::<f32>() {
+                    uniforms.push((k.clone(), f));
+                }
+            }
+        }
+    }
+    let key = format!("bg:{name}");
+    if let Some(rgba) = fx
+        .shaders
+        .render_masked(&key, src, dw, dh, fx.time, fx.frame, &uniforms)
+    {
+        paint_rgba_at(cr, dw as usize, dh as usize, rgba, fx.scale, 0.0, 0.0);
+    }
 }
 
 /// Rasterized icon buffers keyed by (source, device px, tint) — an ARGB32 buffer

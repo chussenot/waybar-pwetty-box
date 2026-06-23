@@ -56,6 +56,7 @@ pub fn content_animates(markup: &str) -> bool {
         || markup.contains("state=\"shell\"")
         || markup.contains("<pulse")
         || markup.contains("<tickerbox")
+        || markup.contains("<bg")
 }
 
 impl ContentStore {

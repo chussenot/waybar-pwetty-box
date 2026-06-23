@@ -14,12 +14,15 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
     vec3 col = mix(vec3(0.02, 0.04, 0.10), vec3(0.05, 0.09, 0.21), uv.y);
     float n = fbm(p * 3.0 + vec2(iTime * 0.03, iTime * 0.015));
     col += vec3(0.10, 0.16, 0.34) * pow(n, 2.0) * 0.7;
-    vec2 g = vec2(uv.x * ar, uv.y) * 64.0;
+    // Stars: fewer, larger cells -> bigger multi-pixel dots; near-max brightness
+    // with only a gentle, slow twinkle (so they read as bright points, not noise).
+    vec2 g = vec2(uv.x * ar, uv.y) * 38.0;
     vec2 gi = floor(g); float st = hash(gi);
     if (st > 0.93) {
         float d = length(fract(g) - 0.5);
-        float tw = 0.5 + 0.5 * sin(iTime * 3.0 + st * 30.0);
-        col += vec3(0.70, 0.80, 1.0) * smoothstep(0.45, 0.0, d) * tw * 0.9;
+        float tw = 0.72 + 0.28 * sin(iTime * 0.8 + st * 30.0);
+        float dot = smoothstep(0.42, 0.06, d);
+        col += vec3(0.90, 0.95, 1.0) * dot * tw;
     }
     fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
