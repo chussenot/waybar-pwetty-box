@@ -3,6 +3,6 @@
   "active": true,
   "state": "working",
   "folder": "pwetty-box",
-  "title": "Harder Better Faster Stronger · refactor the inline flow layout",
+  "title": "refactor the inline flow layout and add wrapped-title support",
   "unpushed": 3
 }

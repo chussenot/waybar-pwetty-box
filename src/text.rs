@@ -147,6 +147,28 @@ pub fn ink_extent(markup: &str, family: &str, size_px: f64) -> Option<(f64, f64)
     Some((top as f64, (bot - top + 1) as f64))
 }
 
+/// Lay out `markup` **word-wrapped** to `width` px (multi-line, static — no
+/// scrolling). Returns the layout; the caller reads its pixel height and paints
+/// it at a top-left origin. Used for tile bodies (e.g. a wrapped window title)
+/// where wrapping replaces a scrolling marquee — static text means no per-frame
+/// repaint.
+pub fn layout_wrapped(
+    cr: &cairo::Context,
+    markup: &str,
+    width: f64,
+    style: &TextStyle,
+) -> pango::Layout {
+    let layout = pangocairo::functions::create_layout(cr);
+    layout.set_markup(markup);
+    let mut desc = pango::FontDescription::new();
+    desc.set_family(&style.font_family);
+    desc.set_absolute_size(style.size_px * pango::SCALE as f64);
+    layout.set_font_description(Some(&desc));
+    layout.set_width((width.max(1.0) * pango::SCALE as f64) as i32);
+    layout.set_wrap(pango::WrapMode::WordChar);
+    layout
+}
+
 /// Pixel rect of plain-text byte range `[start, end)` within `layout` painted at
 /// origin `(ox, oy)`.
 ///

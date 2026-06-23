@@ -179,11 +179,11 @@ mod tests {
 
     #[test]
     fn resolve_layers_bundled_preset_under_module_keys() {
-        // `tile: claude` brings width 300 / height 50 / a format; the module
+        // `tile: claude` brings the preset geometry + a format; the module
         // overrides width and adds exec. Module keys win; preset fills the rest.
         let c = resolve(json!({ "tile": "claude", "width": 360, "exec": "echo" }));
         assert_eq!(c.width, 360); // module override wins
-        assert_eq!(c.height, 50); // from preset
+        assert_eq!(c.height, 96); // from preset
         assert_eq!(c.exec.as_deref(), Some("echo"));
         assert!(c.format.as_deref().unwrap().contains("<status"));
     }

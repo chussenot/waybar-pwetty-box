@@ -221,17 +221,19 @@ impl Module for PwettyBox {
             });
         }
 
-        // Animate by redrawing on the frame clock — for fps>0, a live shader, or
-        // an animated inline embed (scrolling ticker, blinking status). The frame
-        // clock fires at the monitor's rate (~60Hz); we throttle queue_draw to a
-        // target fps so several animated tiles don't cook the CPU/GPU. The blink/
-        // pulse/ticker are smooth well below 60.
-        let has_anim = shared
-            .config
-            .format
-            .as_deref()
-            .is_some_and(|f| f.contains("<tickerbox") || f.contains("<status"));
-        if shared.config.fps > 0 || shared.config.background_shader.is_some() || has_anim {
+        // Animate by redrawing on the frame clock — but ONLY while there's
+        // actually something moving. The frame clock fires at the monitor's rate
+        // (~60Hz); we throttle queue_draw to a target fps, AND each tick we check
+        // whether the *current* content animates (a blinking status / `<pulse>` /
+        // marquee). A static tile (idle/empty/plain wrapped text) queues nothing —
+        // it only repaints when its data changes (the dirty poll below). This is
+        // what keeps a bar full of mostly-idle desktops cool.
+        let forced = shared.config.fps > 0 || shared.config.background_shader.is_some();
+        let could_anim = forced
+            || shared.config.format.as_deref().is_some_and(|f| {
+                f.contains("<tickerbox") || f.contains("<status") || f.contains("<pulse")
+            });
+        if could_anim {
             let target_fps = if shared.config.fps > 0 {
                 shared.config.fps
             } else {
@@ -241,11 +243,15 @@ impl Module for PwettyBox {
                                                                // 0 sentinel (not i64::MIN — `now - i64::MIN` overflows): the first
                                                                // tick's `now - 0` is huge, so it draws immediately, then throttles.
             let last = std::cell::Cell::new(0i64);
+            let tick_content = content.clone();
             area.add_tick_callback(move |area, clock| {
-                let now = clock.frame_time();
-                if now - last.get() >= min_dt {
-                    last.set(now);
-                    area.queue_draw();
+                let animating = forced || tick_content.as_ref().is_some_and(|s| s.animating());
+                if animating {
+                    let now = clock.frame_time();
+                    if now - last.get() >= min_dt {
+                        last.set(now);
+                        area.queue_draw();
+                    }
                 }
                 gtk::glib::ControlFlow::Continue
             });
@@ -389,7 +395,7 @@ const EFFECT_TAGS: &[&str] = &["box", "glow"];
 /// spacer that draws nothing — its purpose is to *split a text run*, so adjacent
 /// differently-sized spans each get independently vertically-centered (a single
 /// Pango run would baseline-align them instead).
-const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon", "sep"];
+const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon", "sep", "wrap"];
 
 /// Default redraw rate for auto-animated tiles (blink/pulse/ticker) when the
 /// config doesn't pin `fps`. Below the monitor's 60Hz but smooth (the per-frame
@@ -619,29 +625,61 @@ fn draw_flow(
     let pad = config.font_size as f64 * 0.5; // left pad, width-agnostic
     let center = config.align.as_deref() == Some("center");
     let lines = flow_layout(&processed.markup);
-    let block_h = line_h * lines.len() as f64;
-    let oy0 = ((h - block_h) / 2.0).max(0.0);
 
-    // A leading `<icon hero/>` becomes a big left gutter spanning all lines
-    // (vertically centered over the whole tile); the text lines indent past it.
-    // This lets a window tile show a prominent app icon AND a marquee *below* it.
+    // A leading `<icon hero/>` becomes a big left gutter (sized by tile height,
+    // centered on the tile); the text lines indent past it. Lets a window tile
+    // show a prominent app icon with the header + wrapped title to its right.
     let mut left = pad;
     let mut hero = false;
     if let Some(FlowItem::Embed(idx)) = lines.first().and_then(|l| l.first()) {
         if let Some(e) = processed.embeds.get(*idx) {
             if e.tag == "icon" && attr(&e.attrs, "hero").is_some() {
-                let hero_h = (block_h * 0.94).min(h * 0.84);
-                let cy = oy0 + block_h / 2.0;
-                draw_icon(cr, &e.attrs, pad + hero_h / 2.0, cy, hero_h, scale);
+                let hero_h = h * 0.7;
+                draw_icon(cr, &e.attrs, pad + hero_h / 2.0, h / 2.0, hero_h, scale);
                 left = pad + hero_h + config.font_size as f64 * 0.5;
                 hero = true;
             }
         }
     }
 
+    // Per-line heights: a `<wrap>` block word-wraps to the remaining width and is
+    // as tall as it needs; every other line is one `line_h`. Pre-compute (and
+    // keep the wrapped layouts) so the whole block can be vertically centered.
+    let avail = (w - left - pad).max(20.0);
+    let mut wraps: Vec<Option<pango::Layout>> = Vec::with_capacity(lines.len());
+    let mut heights: Vec<f64> = Vec::with_capacity(lines.len());
+    for items in &lines {
+        let wrap = items.iter().find_map(|it| match *it {
+            FlowItem::Embed(i) => processed.embeds.get(i).filter(|e| e.tag == "wrap"),
+            _ => None,
+        });
+        match wrap {
+            Some(e) => {
+                let layout = text::layout_wrapped(cr, &e.inner, avail, style);
+                let hgt = (layout.pixel_size().1 as f64).max(line_h);
+                wraps.push(Some(layout));
+                heights.push(hgt);
+            }
+            None => {
+                wraps.push(None);
+                heights.push(line_h);
+            }
+        }
+    }
+    let total: f64 = heights.iter().sum();
+    let mut y = ((h - total) / 2.0).max(0.0);
+
     for (li, items) in lines.iter().enumerate() {
-        let ly = oy0 + li as f64 * line_h;
-        let center_y = ly + line_h / 2.0; // the line's vertical mid-line
+        let lh = heights[li];
+        let ly = y;
+        let center_y = y + lh / 2.0; // the line's vertical mid-line
+        y += lh;
+
+        // A wrapped body line: paint the multi-line block at the gutter, top-down.
+        if let Some(layout) = &wraps[li] {
+            text::paint(cr, layout, left, ly, style);
+            continue;
+        }
 
         // First pass: lay out each text run, capturing its ink box.
         let mut laid: Vec<Option<Run>> = Vec::with_capacity(items.len());
@@ -1022,9 +1060,14 @@ fn draw_glyph_centered(
         color: (c.r as f64, c.g as f64, c.b as f64, 1.0),
         align_center: false,
     };
-    let (layout, _oy, lw) = text::layout_line(cr, &format!("<b>{glyph}</b>"), cap_h * 2.0, &style);
-    let ink = layout.pixel_extents().0;
-    let y = cy - ink.y() as f64 - ink.height() as f64 / 2.0;
+    let markup = format!("<b>{glyph}</b>");
+    let (layout, _oy, lw) = text::layout_line(cr, &markup, cap_h * 2.0, &style);
+    // Use the TRULY-rendered ink (font-robust, incl. bitmap fonts) to center —
+    // the same metric the neighbouring digit uses, so they line up. Pango's
+    // pixel_extents lie for bitmap fonts and would misalign the glyph.
+    let (ink_top, ink_h) = text::ink_extent(&markup, family, style.size_px)
+        .unwrap_or((0.0, layout.pixel_size().1 as f64));
+    let y = cy - ink_top - ink_h / 2.0;
     text::paint(cr, &layout, cx - lw / 2.0, y, &style);
 }
 

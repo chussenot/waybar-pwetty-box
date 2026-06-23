@@ -39,24 +39,50 @@ pub struct ContentStore {
 struct Inner {
     content: Mutex<TileContent>,
     dirty: AtomicBool,
+    /// Whether the current content has a *moving* element (blinking status,
+    /// `<pulse>`, or a marquee) — i.e. whether it needs per-frame redraws. A
+    /// static tile (idle/empty/plain wrapped text) is `false` and only repaints
+    /// on a content change (the dirty flag), keeping the bar cool.
+    animating: AtomicBool,
+}
+
+/// Whether rendered tile `markup` contains a continuously-animated element.
+/// Idle/`empty`/`shell`-less static content is not animated; a blinking status
+/// (`working`/`prompt`/`shell`), a `<pulse>`, or a `<tickerbox>` is.
+pub fn content_animates(markup: &str) -> bool {
+    markup.contains("state=\"working\"")
+        || markup.contains("state=\"prompt\"")
+        || markup.contains("state=\"shell\"")
+        || markup.contains("<pulse")
+        || markup.contains("<tickerbox")
 }
 
 impl ContentStore {
     pub fn new(initial: TileContent) -> Self {
+        let animating = content_animates(&initial.markup);
         Self {
             inner: Arc::new(Inner {
                 content: Mutex::new(initial),
                 dirty: AtomicBool::new(true),
+                animating: AtomicBool::new(animating),
             }),
         }
     }
 
     /// Replace the content and mark it dirty (a redraw is due).
     pub fn set(&self, content: TileContent) {
+        self.inner
+            .animating
+            .store(content_animates(&content.markup), Ordering::Release);
         if let Ok(mut guard) = self.inner.content.lock() {
             *guard = content;
         }
         self.inner.dirty.store(true, Ordering::Release);
+    }
+
+    /// Whether the current content animates (see [`content_animates`]).
+    pub fn animating(&self) -> bool {
+        self.inner.animating.load(Ordering::Acquire)
     }
 
     /// The current markup string (cheap clone for per-frame paint).

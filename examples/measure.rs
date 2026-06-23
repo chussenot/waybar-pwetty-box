@@ -28,7 +28,8 @@ fn main() {
 
     // digit "5": light lavender (#cdd6f4) ; dot: orange (#ff6a2c)
     let digit = extent(&|r, g, b| r > 150 && g > 160 && b > 195);
-    let orange = extent(&|r, g, b| r > 150 && g < 150 && b < 120 && r as i32 > g as i32 + 40);
+    // warm symbol pixels (orange dot / gold ?), excluding the light lavender digit
+    let orange = extent(&|r, _g, b| r > 180 && b < 130 && r as i32 > b as i32 + 80);
     println!("image {w}x{h}");
     if let Some((x0, x1, y0, y1)) = digit {
         println!("digit  x[{x0}..{x1}] y[{y0}..{y1}]  height={}", y1 - y0 + 1);
