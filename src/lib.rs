@@ -618,6 +618,23 @@ fn draw_flow(
     let block_h = line_h * lines.len() as f64;
     let oy0 = ((h - block_h) / 2.0).max(0.0);
 
+    // A leading `<icon hero/>` becomes a big left gutter spanning all lines
+    // (vertically centered over the whole tile); the text lines indent past it.
+    // This lets a window tile show a prominent app icon AND a marquee *below* it.
+    let mut left = pad;
+    let mut hero = false;
+    if let Some(FlowItem::Embed(idx)) = lines.first().and_then(|l| l.first()) {
+        if let Some(e) = processed.embeds.get(*idx) {
+            if e.tag == "icon" && attr(&e.attrs, "hero").is_some() {
+                let hero_h = (block_h * 0.94).min(h * 0.84);
+                let cy = oy0 + block_h / 2.0;
+                draw_icon(cr, &e.attrs, pad + hero_h / 2.0, cy, hero_h, scale);
+                left = pad + hero_h + config.font_size as f64 * 0.5;
+                hero = true;
+            }
+        }
+    }
+
     for (li, items) in lines.iter().enumerate() {
         let ly = oy0 + li as f64 * line_h;
         let center_y = ly + line_h / 2.0; // the line's vertical mid-line
@@ -664,9 +681,13 @@ fn draw_flow(
         let mut x = if center {
             ((w - total) / 2.0).max(0.0)
         } else {
-            pad
+            left
         };
         for (ii, item) in items.iter().enumerate() {
+            // Skip the leading hero icon — it's already drawn as the gutter.
+            if hero && li == 0 && ii == 0 {
+                continue;
+            }
             match *item {
                 FlowItem::Text(_) => {
                     if let Some(run) = &laid[ii] {
