@@ -32,7 +32,7 @@
     "state": {
       "type": "string",
       "enum": ["working", "prompt", "idle", "shell"],
-      "description": "REAL (sessions.state). Drives the animated <status> indicator: working=blinking orange dot, prompt=blinking yellow '?', idle=static fade bar (see idle_level), shell=pulsing cyan dot."
+      "description": "REAL (sessions.state). Drives the animated <status> indicator: working=Claude mascot in deep orange (slow blink + glow), prompt=blinking yellow '?' (and the whole tile pulses), idle=static fade bar (see idle_level), shell=Claude mascot in electric cyan (pulse + glow)."
     },
     "idle_level": {
       "type": "integer",
@@ -53,7 +53,7 @@
     },
     "title": {
       "type": "string",
-      "description": "MOCK. The session window title, shown as a looping marquee on line 2. (Resolve from window_id via the niri window model; not stored on the session row.)",
+      "description": "MOCK. The session window title, word-wrapped (static) on line 2. (Resolve from window_id via the niri window model; not stored on the session row.)",
       "examples": ["Harder Better Faster Stronger · refactor the inline flow layout"]
     },
     "unpushed": {

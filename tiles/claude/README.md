@@ -1,13 +1,15 @@
 # `claude` tile
 
-A wide signage tile representing one niri desktop running a Claude session:
-shortcut number, an animated session-status indicator, the folder name, an
-unpushed-commits badge, and a scrolling window-title marquee.
+A tall signage tile representing one niri desktop running a Claude session:
+shortcut number, an animated session-status indicator (the pixel-art Claude
+mascot), the folder name, an unpushed-commits badge, and the word-wrapped
+window title.
 
 ```
 ┌──────────────────────────────────────────┐
-│ 5  ●  pwetty-box            ↑3            │   line 1: shortcut + status + folder + ↑commits
-│ ⟨Harder Better Faster Stronger · refac…⟩  │   line 2: title marquee (loops)
+│ 5  ⬛  pwetty-box            ↑3           │   line 1: shortcut + status + folder + ↑commits
+│ refactor the inline flow layout and        │   line 2: title, word-wrapped (static,
+│ add wrapped-title support                  │            as many lines as it needs)
 └──────────────────────────────────────────┘
 ```
 
@@ -40,8 +42,8 @@ The `exec` stdout (or static `text`) must be a JSON object matching
 | `state`      | enum            | REAL   | `working` \| `prompt` \| `idle` \| `shell` — drives the indicator |
 | `idle_level` | integer 0–6     | REAL-derived | only used when `state=idle`; 0=just-idled (white) → 6=>60min (dim) |
 | `folder`     | string          | REAL   | basename of the session `cwd` |
-| `title`      | string          | MOCK   | window title; scrolls as a marquee |
-| `unpushed`   | integer         | MOCK   | unpushed commit count; shown as `↑N` in the marquee, hidden when 0 |
+| `title`      | string          | MOCK   | window title; word-wrapped on line 2 (static) |
+| `unpushed`   | integer         | MOCK   | unpushed commit count; shown as `↑N` after the folder, hidden when 0 or when idle (idle shows `idle_ago` instead) |
 | `idle_ago`   | string          | REAL-derived | when `state=idle`: "time since active", e.g. `12m` (shown as `12m ago`) |
 | `active`     | boolean         | niri   | focused desktop → an accent "card" (fill + border) so it stands out |
 | `is_claude`  | boolean         | derive | `true` → the status/folder layout; `false` → the app-icon layout (below) |
@@ -55,11 +57,14 @@ session field yet; synthesize it. `state` values are the daemon's own strings.
 status indicator + folder (+ `idle_ago` when idle). A plain desktop
 (`is_claude=false`) shows the leftmost window's **app icon** + `app` label
 instead — `app_icon` is a bundled icon name (e.g. `code`) or a path to any
-`.svg` (e.g. a freedesktop app icon). Both layouts share the line-2 title marquee.
+`.svg` (e.g. a freedesktop app icon). Both layouts share the line-2 word-wrapped title.
 
-The indicator: `working` → blinking orange ●, `prompt` → blinking yellow `?`,
-`shell` → pulsing cyan ●, `idle` → a static two-cell bar that fades white→grey
-with `idle_level`.
+The indicator: `working` → the **Claude mascot** in deep orange, slow blink +
+color-matched glow; `prompt` → a blinking yellow `?` (and the *whole tile*
+pulses, to pull your eye); `shell` → the **Claude mascot** in electric cyan,
+pulsing + glow; `idle` → a static two-cell bar that fades white→grey with
+`idle_level`. (Idle/empty tiles are fully static — they don't repaint, keeping
+the bar cool; only `working`/`prompt`/`shell` animate.)
 
 ## Inspecting / previewing
 

@@ -110,15 +110,24 @@ glow a value only when it's critical).
 
 Some elements are **placed inline** in the text flow rather than laid out as
 glyphs — they reserve a fixed-width box that surrounding text composes around,
-**across multiple lines** (`\n` in the template starts a new line). Two embeds
-ship today:
+**across multiple lines** (`\n` in the template starts a new line). The embeds
+that ship today:
 
+- `<wrap>…</wrap>` — a **word-wrapped text block**: the inner text flows onto as
+  many lines as it needs (within the tile width), vertically centered as a block.
+  Static — no motion. This is how the bundled `claude` tile renders titles.
 - `<tickerbox width="N">…</tickerbox>` — a **scrolling marquee** for content
   wider than its box: clipped, scrolling briskly, looping with a `◆` seam marker.
-  Renders static (no scroll) when the content fits.
-- `<status state="…" level="N"/>` — an **animated indicator** (a blinking/pulsing
-  dot, a `?`, or a fade bar). See the bundled `claude` tile below.
+  Renders static (no scroll) when the content fits. (Animated — prefer `<wrap>`
+  for long static text; reach for the marquee only when horizontal motion is the
+  point, since it forces a per-frame repaint.)
+- `<status state="…" level="N"/>` — an **animated session indicator**: `working`
+  and `shell` render the pixel-art **Claude mascot** (orange / electric-cyan,
+  each with a color-matched glow), `prompt` a blinking `?`, `idle` a static fade
+  bar keyed by `level`. See the bundled `claude` tile below.
 - `<icon name="…"/>` / `<icon src="…"/>` — an **SVG icon** (see below).
+- `<sep/>` — a thin gap that splits adjacent text into independent runs (so a
+  digit and a word don't share one Pango baseline).
 
 Inline symbols (status, icons) are sized to the **ink box of the digit/text
 beside them** and centered on the line, so they read as peers — no font-glyph
@@ -183,12 +192,13 @@ to iterate without rebuilding (`"tile_file": "/path/tile.json"`).
 These tiles are really niri **desktop** tiles. Two ship:
 
 - **`claude`** — a desktop running a Claude session: shortcut number, an animated
-  session-status indicator (`working`→deep orange blink, `prompt`→pulsing `?`,
-  `shell`→electric-cyan pulse, `idle`→a fade bar by `idle_level`, each with a
-  color-matched glow), the folder, an `↑N` unpushed-commits badge, and a scrolling
-  window-title marquee. When the desktop holds an ordinary window instead
-  (`is_claude=false`), it shows the app icon + name. The **focused** desktop
-  (`active=true`) gets an accent card.
+  session-status indicator (`working`→deep-orange Claude mascot blink, `shell`→
+  electric-cyan mascot pulse, both with a color-matched glow; `prompt`→pulsing `?`;
+  `idle`→a fade bar by `idle_level`), the folder, an `↑N` unpushed-commits badge
+  (or `idle_ago` when idle), and the **word-wrapped** window title on line 2. On
+  `prompt` the whole tile pulses to pull your eye. When the desktop holds an
+  ordinary window instead (`is_claude=false`), it shows the app icon + name. The
+  **focused** desktop (`active=true`) gets an accent card.
 - **`empty`** — a compact, narrow tile for a windowless desktop: just the shortcut
   number stacked over a dim "empty" ring, center-aligned. (`tile: "empty"`.)
 
