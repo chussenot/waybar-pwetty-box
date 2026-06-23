@@ -601,7 +601,7 @@ fn embed_ew(tag: &str, attrs: &[(String, String)], cap_h: f64) -> f64 {
         "status" => {
             let idle_ago = attr(attrs, "state") == Some("idle")
                 && attr(attrs, "ago").is_some_and(|s| !s.is_empty());
-            embed_width(attrs, cap_h * if idle_ago { 2.4 } else { 1.7 })
+            embed_width(attrs, cap_h * if idle_ago { 3.0 } else { 1.7 })
         }
         "icon" => embed_width(attrs, cap_h * icon_size(attrs) + cap_h * 0.3),
         "tickerbox" => embed_width(attrs, 160.0),
@@ -1111,21 +1111,22 @@ fn draw_idle_cells(cr: &gtk::cairo::Context, cx: f64, cap_cy: f64, cap_h: f64, h
     let _ = cr.fill();
 }
 
-/// Draw the idle indicator as a **badge**: the two decay cells with the
-/// "time since active" (`ago`, e.g. `12m`) set on an arc that circles over the
-/// top of them. The arc text carries a mild, *static* Knight-Rider (K-2000) red
-/// gradient — brightest at the centre of the sweep, dimming to the edges — frozen
-/// (no animation, so idle tiles stay cheap). A scalable face is used for the arc
-/// (bitmap faces don't rotate cleanly), so it reads even at small sizes.
+/// Draw the idle indicator as a **badge**: the two decay cells on the left, with
+/// the "time since active" (`ago`, e.g. `12m`) as a plain, readable, *horizontal*
+/// label to their right — vertically centred on the line, in a mild Knight-Rider
+/// (K-2000) red (a static left→centre→right red gradient; no animation, so idle
+/// tiles stay cheap). The whole badge lives in the status embed's reserved width,
+/// so the time never spills into the folder/next tile. (An earlier version arced
+/// the time over the bars, but that's illegible in a short bar — readability wins.)
 fn draw_idle_badge(cr: &gtk::cairo::Context, cx: f64, cy: f64, cap_h: f64, hex: &str, ago: &str) {
-    // The decay cells stay full-size and centred on the line (so the indicator
-    // lines up with the digit/folder), nudged down just enough to free a band
-    // above them for the time.
-    let bar_h = cap_h * 0.62;
-    let bar_cy = cy + cap_h * 0.06; // centred on the line (matches the digit), bare nudge
-    draw_idle_cells(cr, cx, bar_cy, bar_h, hex);
+    // The box is `cap_h * 3.0` wide (see `embed_ew`), centred on `cx`. Put the
+    // bars at the left, the time filling the rest.
+    let ew = cap_h * 3.0;
+    let left = cx - ew / 2.0;
+    let bar_cx = left + cap_h * 0.55;
+    draw_idle_cells(cr, bar_cx, cy, cap_h, hex);
 
-    let fs = cap_h * 0.60;
+    let fs = cap_h * 0.92; // big enough to actually read at tile scale
     if fs < 4.0 || ago.is_empty() {
         return;
     }
@@ -1136,49 +1137,17 @@ fn draw_idle_badge(cr: &gtk::cairo::Context, cx: f64, cy: f64, cap_h: f64, hex: 
         gtk::cairo::FontWeight::Bold,
     );
     cr.set_font_size(fs);
-
-    // Per-glyph advances, so the string is distributed by real width on the arc.
-    let chars: Vec<String> = ago.chars().map(|c| c.to_string()).collect();
-    let advances: Vec<f64> = chars
-        .iter()
-        .map(|c| {
-            cr.text_extents(c)
-                .map(|e| e.x_advance())
-                .unwrap_or(fs * 0.6)
-        })
-        .collect();
-    let arc_len: f64 = advances.iter().sum();
-
-    // A GENTLE arc (large radius => low curvature => legible, not a cramped
-    // "crown"), curving up over the bars. The radius is tuned for a tasteful
-    // smile; a small radius would crowd/illegible-ize the glyphs at tile scale.
-    let r = (cap_h * 1.5).max(arc_len * 0.9);
-    let half = arc_len / 2.0;
-    // The arch's edge glyphs dip below the apex by `sag`; place the apex so those
-    // lowest glyphs clear the bars by a small gap, and keep the apex's glyph tops
-    // inside the tile. This is what stops the time from grazing the cells.
-    let sag = r * (1.0 - (half / r).cos());
-    let bar_top = bar_cy - bar_h / 2.0;
-    let apex_y = (bar_top - fs * 0.16 - sag).max(fs * 0.72);
-    let center_y = apex_y + r; // arc centre far below -> only the gentle top shows
-
-    let mut s = -half; // arc-length position, 0 = apex (top, upright)
-    for (glyph, adv) in chars.iter().zip(&advances) {
-        let mid = s + adv / 2.0;
-        let a = mid / r; // angle from the apex
-                         // K-2000 sweep: hottest at the centre, dimming toward the edges.
-        let t = (1.0 - mid.abs() / (half + 1e-3)).clamp(0.0, 1.0);
-        let red = 0.62 + 0.38 * t;
-        let gb = 0.14 + 0.22 * t;
-        cr.save().ok();
-        cr.translate(cx + r * a.sin(), center_y - r * a.cos());
-        cr.rotate(a); // tangent: upright at apex, tilting gently at the edges
-        cr.set_source_rgb(red, gb, gb);
-        cr.move_to(-adv / 2.0, fs * 0.34); // centre the glyph on the arc point
-        let _ = cr.show_text(glyph);
-        cr.restore().ok();
-        s += adv;
-    }
+    let ext = cr.text_extents(ago).map(|e| e.width()).unwrap_or(fs * 1.5);
+    let tx = bar_cx + cap_h * 0.85; // just right of the cells
+    let ty = cy + fs * 0.36; // baseline -> roughly vertically centred ink
+                             // Mild K-2000 red: deep at the ends, brighter through the middle.
+    let grad = gtk::cairo::LinearGradient::new(tx, 0.0, tx + ext, 0.0);
+    grad.add_color_stop_rgb(0.0, 0.62, 0.14, 0.14);
+    grad.add_color_stop_rgb(0.5, 1.0, 0.32, 0.30);
+    grad.add_color_stop_rgb(1.0, 0.62, 0.14, 0.14);
+    let _ = cr.set_source(&grad);
+    cr.move_to(tx, ty);
+    let _ = cr.show_text(ago);
     cr.restore().ok();
 }
 
