@@ -12,6 +12,10 @@ float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++){ v += a *
 // expands a hex attr into stars_r/g/b). Used as a mild attention signal: warm
 // stars say "look here", cool blue-white is the calm default.
 uniform float stars_r; uniform float stars_g; uniform float stars_b;
+// Stars get their OWN opacity, separate from the blue field's u_alpha — so the
+// background can stay subtle while the stars read strongly. Defaults to 0.9 when
+// unset; override via <bg preset="night" stars_alpha="0.7"/>.
+uniform float stars_alpha;
 
 // Invariants the star colour always satisfies, whatever uniforms arrive:
 //   1. clamped to a valid [0,1] colour (no HDR blow-out, no negatives);
@@ -28,15 +32,21 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
     vec2 uv = fragCoord / iResolution.xy;
     float ar = iResolution.x / iResolution.y;
     vec2 p = vec2(uv.x * ar, uv.y);
-    vec3 col = mix(vec3(0.02, 0.04, 0.10), vec3(0.05, 0.09, 0.21), uv.y);
+
+    // Blue-ish background field: vertical gradient + drifting nebula haze.
+    vec3 bg = mix(vec3(0.02, 0.04, 0.10), vec3(0.05, 0.09, 0.21), uv.y);
     float n = fbm(p * 3.0 + vec2(iTime * 0.03, iTime * 0.015));
-    col += vec3(0.10, 0.16, 0.34) * pow(n, 2.0) * 0.7;
+    bg += vec3(0.10, 0.16, 0.34) * pow(n, 2.0) * 0.7;
+    bg = clamp(bg, 0.0, 1.0);
+
     // Stars on a square cell grid. Each lit cell gets:
     //   - a per-star size in *device px* — most ~1px, some ~2px (a hash picks);
     //   - an independent twinkle (per-star rate + phase) with a WIDE amplitude
     //     so the blink is clearly visible, still peaking at full brightness;
     //   - scintillation: a per-star colour shimmering cool<->warm around the
     //     base star colour, so the field has subtle colour variety.
+    vec3 starCol = vec3(0.0);
+    float starInt = 0.0;
     float cells = 38.0;
     vec2 g = vec2(uv.x * ar, uv.y) * cells;
     vec2 gi = floor(g);
@@ -54,9 +64,19 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         float tw  = pow(pulse, 1.7);                      // ~0 .. 1
         float warm = hash(gi + 5.1);                      // per-star hue bias
         vec3 chroma = mix(vec3(0.72, 0.84, 1.12), vec3(1.12, 0.96, 0.78), warm);
-        vec3 sc = clamp(star_color() * chroma, 0.0, 1.0);
-        sc *= 0.90 + 0.10 * sin(iTime * spd * 1.6 + ph * 1.3); // colour shimmer
-        col += sc * dot * tw;
+        starCol = clamp(star_color() * chroma, 0.0, 1.0);
+        starCol *= 0.90 + 0.10 * sin(iTime * spd * 1.6 + ph * 1.3); // colour shimmer
+        starInt = dot * tw;
     }
-    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+
+    // Two opacities: the blue field rides u_alpha (kept subtle), the stars ride
+    // their own (high) alpha — composited "over" the field so star pixels read
+    // strongly while the background stays a faint tint. The wrapper then masks
+    // the whole layer to the focus bubble.
+    float ba = clamp(u_alpha, 0.0, 1.0);
+    float sa_max = (stars_alpha > 0.001) ? clamp(stars_alpha, 0.0, 1.0) : 0.90;
+    float sa = clamp(sa_max * starInt, 0.0, 1.0);
+    float a = sa + ba * (1.0 - sa);
+    vec3 rgb = (a > 0.0001) ? (starCol * sa + bg * ba * (1.0 - sa)) / a : bg;
+    fragColor = vec4(clamp(rgb, 0.0, 1.0), a);
 }

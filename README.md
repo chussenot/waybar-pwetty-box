@@ -265,13 +265,18 @@ fade** — a graphical accent for *some* tiles, not a show-off.
 - `preset` — a bundled shader (`night` = deep-blue sky + drifting nebula +
   twinkling stars; `caustic` = night-blue water). Registered in `src/shader.rs`
   (`shaders/*.glsl`).
-- `alpha` — layer opacity (default `0.28`); `fade` — edge-fade width in px
-  (default `20`).
+- `alpha` — layer opacity (default `0.28`); `fade` — steep edge-cliff width in px
+  (default `20`); `falloff` — the slow vignette radius in px (default = the
+  bubble's short half-extent) stacked under the cliff, so the layer is brightest
+  deep inside and gently fades toward the edges.
 - Any other attribute becomes a uniform: a plain number → a `float` (e.g.
-  `speed='0.4'`); a hex colour → three `name_r/g/b` floats (e.g.
-  `<bg preset='night' stars='#f9e2af'/>` tints the stars). `night`'s star colour
-  is clamped and defaults to cool blue-white if unset — handy as a *very mild*
-  attention signal (warm stars = "look here") without recolouring the whole tile.
+  `speed='0.4'`); a hex colour → three `name_r/g/b` floats.
+
+`night` specifics: `alpha` controls only the **blue field** (gradient + nebula);
+the **stars carry their own opacity** (`stars_alpha`, default `0.9`) so they stay
+crisp while the field is faint. `stars="#rrggbb"` tints the stars (clamped,
+defaults to cool blue-white) — a *very mild* attention signal (warm stars = "look
+here") that doesn't recolour the whole tile.
 
 The mask mirrors the focus bubble exactly (one shared `focus_bubble()`), so it
 lines up with the active-card border. Like any shader it repaints per frame

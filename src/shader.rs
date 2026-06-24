@@ -132,12 +132,14 @@ pub fn wrap_fragment(user: &str) -> String {
     )
 }
 
-/// As [`wrap_fragment`], but multiplies the shader's alpha by a rounded-rect mask
-/// (the focus bubble) and an overall `u_alpha`. The mask is full inside the box
-/// and fades to zero across a `u_fade`-pixel band at the edge, so `<bg>` presets
-/// read as a mild, contained graphical layer rather than a full-bleed background.
-/// Bubble bounds (`u_bx,u_by,u_bw,u_bh`) and `u_radius`/`u_fade` are device px.
-/// Output is straight alpha (premultiplied later by `paint_rgba_at`).
+/// As [`wrap_fragment`], but multiplies the shader's alpha by a rounded-rect
+/// **focus-bubble mask** so `<bg>` presets read as a contained graphical layer.
+/// The mask stacks a steep `u_fade`-px edge cliff (clean boundary) under a slow
+/// `u_falloff`-px vignette (brightest deep inside, gently fading out). The preset
+/// owns its *own* opacity via its `fragColor.a` (the wrapper-declared `u_alpha`
+/// is available to it but no longer applied here — that lets a preset give, say,
+/// its background and its highlights different alphas). Output is straight alpha
+/// (premultiplied later by `paint_rgba_at`). Bubble bounds + radii are device px.
 pub fn wrap_fragment_masked(user: &str) -> String {
     format!(
         "#version 300 es\n\
@@ -164,7 +166,7 @@ pub fn wrap_fragment_masked(user: &str) -> String {
              //           brightest deep inside, dimming out toward the edge).\n\
              float cliff = clamp(dist / max(u_fade, 1.0), 0.0, 1.0);\n\
              float slow  = clamp(dist / max(u_falloff, 1.0), 0.0, 1.0);\n\
-             _pwetty_fragColor = vec4(c.rgb, c.a * u_alpha * cliff * slow);\n\
+             _pwetty_fragColor = vec4(c.rgb, c.a * cliff * slow);\n\
          }}\n"
     )
 }
@@ -372,8 +374,8 @@ mod tests {
             assert!(s.contains(u), "missing uniform {u}");
         }
         assert!(s.contains("_pw_sdbox")); // rounded-rect mask
-        // alpha = shader * overall * steep-edge-cliff * slow-falloff
-        assert!(s.contains("c.a * u_alpha * cliff * slow"));
+        // wrapper applies only the mask (cliff * slow); the preset owns u_alpha
+        assert!(s.contains("c.a * cliff * slow"));
     }
 
     #[test]

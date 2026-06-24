@@ -21,5 +21,6 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec3 base = vec3(0.035, 0.075, 0.17);   // night-blue water
     vec3 glow = vec3(0.34, 0.49, 0.92);     // Catppuccin blue caustic
     vec3 col = base + glow * k;
-    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+    // u_alpha (declared by the masked wrapper) is this layer's overall opacity.
+    fragColor = vec4(clamp(col, 0.0, 1.0), u_alpha);
 }
