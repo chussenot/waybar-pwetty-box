@@ -973,9 +973,14 @@ fn draw_bg(cr: &gtk::cairo::Context, w: f64, h: f64, bg: &markup::BgSpec, fx: &m
                     uniforms.push(("u_fade".into(), f * s));
                 }
             }
-            // Any other attribute is a custom float uniform for the preset.
+            // A hex colour expands to three `name_r/g/b` float uniforms (so a
+            // preset can take e.g. stars="#f9e2af"); otherwise a plain float.
             _ => {
-                if let Ok(f) = v.parse::<f32>() {
+                if let Some(c) = render::parse_hex_color(v) {
+                    uniforms.push((format!("{k}_r"), c.r));
+                    uniforms.push((format!("{k}_g"), c.g));
+                    uniforms.push((format!("{k}_b"), c.b));
+                } else if let Ok(f) = v.parse::<f32>() {
                     uniforms.push((k.clone(), f));
                 }
             }

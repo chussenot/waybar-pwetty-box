@@ -267,8 +267,11 @@ fade** — a graphical accent for *some* tiles, not a show-off.
   (`shaders/*.glsl`).
 - `alpha` — layer opacity (default `0.28`); `fade` — edge-fade width in px
   (default `20`).
-- Any other attribute becomes a `float` uniform for the preset, e.g.
-  `<bg preset='night' speed='0.4'/>`.
+- Any other attribute becomes a uniform: a plain number → a `float` (e.g.
+  `speed='0.4'`); a hex colour → three `name_r/g/b` floats (e.g.
+  `<bg preset='night' stars='#f9e2af'/>` tints the stars). `night`'s star colour
+  is clamped and defaults to cool blue-white if unset — handy as a *very mild*
+  attention signal (warm stars = "look here") without recolouring the whole tile.
 
 The mask mirrors the focus bubble exactly (one shared `focus_bubble()`), so it
 lines up with the active-card border. Like any shader it repaints per frame
