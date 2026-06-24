@@ -51,9 +51,13 @@ struct Inner {
 /// Idle/`empty`/`shell`-less static content is not animated; a blinking status
 /// (`working`/`prompt`/`shell`), a `<pulse>`, or a `<tickerbox>` is.
 pub fn content_animates(markup: &str) -> bool {
-    markup.contains("state=\"working\"")
-        || markup.contains("state=\"prompt\"")
-        || markup.contains("state=\"shell\"")
+    // Quote-agnostic: templates may emit state='working' OR state="working".
+    let has_state = |s: &str| {
+        markup.contains(&format!("state='{s}'")) || markup.contains(&format!("state=\"{s}\""))
+    };
+    has_state("working")
+        || has_state("prompt")
+        || has_state("shell")
         || markup.contains("<pulse")
         || markup.contains("<tickerbox")
         || markup.contains("<bg")
@@ -288,7 +292,22 @@ fn run_command(cmd: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_markup, build_uniforms, parse_data, ContentStore, TileContent};
+    use super::{
+        build_markup, build_uniforms, content_animates, parse_data, ContentStore, TileContent,
+    };
+
+    #[test]
+    fn content_animates_is_quote_agnostic() {
+        // Templates emit single OR double quotes — both must be recognised, or
+        // the frame clock won't animate the tile (the blink crawls to ~2 fps).
+        assert!(content_animates("<status state='working' level='0'/>"));
+        assert!(content_animates("<status state=\"shell\"/>"));
+        assert!(content_animates("a <tickerbox>x</tickerbox>"));
+        assert!(content_animates("<pulse>x</pulse>"));
+        // Static states / plain content do NOT animate.
+        assert!(!content_animates("<status state='idle' level='2'/>"));
+        assert!(!content_animates("just text, folder named working"));
+    }
 
     #[test]
     fn build_markup_binds_data_and_prefixes_icon() {
