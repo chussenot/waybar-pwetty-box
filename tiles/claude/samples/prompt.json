@@ -1,7 +1,6 @@
 {
   "shortcut": 2,
-  "state": "prompt",
-  "folder": "claude-status-db",
-  "title": "Awaiting permission to run: git push origin main",
-  "unpushed": 1
+  "sessions": [
+    { "state": "prompt", "folder": "claude-status-db", "title": "Awaiting permission to run: git push origin main", "unpushed": 1 }
+  ]
 }

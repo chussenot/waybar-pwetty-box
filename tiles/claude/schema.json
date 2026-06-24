@@ -2,84 +2,97 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "pwetty:tile/claude",
   "title": "claude tile data",
-  "description": "Data object bound to the bundled `claude` tile's template. Feed it as the module's `exec` stdout (JSON) or static `text`. Each property notes whether the value is REAL (available from the claude-status-db daemon) or MOCK (synthesize it; not a session field yet).",
+  "description": "Data for the bundled `claude` tile: one niri desktop. The tile is DATA-DRIVEN — waybar always references `claude`, and the template renders by what you send: a `sessions` array (1 → single layout, 2 → stacked dual layout with a shared shortcut gutter), or an ordinary window (`is_claude:false` → app icon + name). Feed it as the module's `exec` stdout (JSON) or static `text`. Each property notes REAL (from the claude-status-db daemon) vs MOCK (synthesize it).",
   "type": "object",
   "required": ["shortcut"],
   "additionalProperties": true,
   "allOf": [
     {
-      "comment": "Two layouts: a Claude session (default) vs an ordinary window.",
+      "comment": "A Claude desktop carries sessions[]; an ordinary window carries app/app_icon instead.",
       "if": {
         "required": ["is_claude"],
         "properties": { "is_claude": { "const": false } }
       },
       "then": {
-        "comment": "Window layout: needs the app icon + label, not state/folder.",
+        "comment": "Window layout: the leftmost window's icon + label.",
         "required": ["app_icon", "app"]
       },
       "else": {
-        "comment": "Claude layout: needs the session state (folder recommended).",
-        "required": ["state"]
+        "comment": "Claude layout: one or two sessions on this desktop.",
+        "required": ["sessions"]
       }
     }
   ],
   "properties": {
     "shortcut": {
       "type": ["integer", "string"],
-      "description": "MOCK. The niri desktop's shortcut number, shown first. (Tracked by the daemon's workspace allocator, not a session field.)",
+      "description": "MOCK. The niri desktop's shortcut number, shown first (big, in a shared left gutter when two sessions).",
       "examples": [5]
-    },
-    "state": {
-      "type": "string",
-      "enum": ["working", "prompt", "idle", "shell"],
-      "description": "REAL (sessions.state). Drives the animated <status> indicator: working=Claude mascot in deep orange (slow blink + glow), prompt=blinking yellow '?' (and the whole tile pulses), idle=static fade bar (see idle_level), shell=Claude mascot in electric cyan (pulse + glow)."
-    },
-    "idle_level": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 6,
-      "default": 0,
-      "description": "REAL-derived (from last_talk_ts decay). Only meaningful when state=idle: 0=just idled (bright white) .. 6=>60min (dim grey). Ignored otherwise."
-    },
-    "idle_ago": {
-      "type": "string",
-      "description": "REAL-derived (from last_talk_ts). Pre-formatted 'time since active' shown only when state=idle, e.g. '12m' or '2h'. Rendered as a readable label beside the idle bars, in a mild static K-2000 red — keep it short (the 'ago' is implied). You format the string.",
-      "examples": ["12m", "2h"]
-    },
-    "folder": {
-      "type": "string",
-      "description": "REAL (basename of sessions.cwd). The session's working-directory name.",
-      "examples": ["pwetty-box"]
-    },
-    "title": {
-      "type": "string",
-      "description": "MOCK. The session window title, word-wrapped (static) on line 2. (Resolve from window_id via the niri window model; not stored on the session row.)",
-      "examples": ["Harder Better Faster Stronger · refactor the inline flow layout"]
-    },
-    "unpushed": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "MOCK. Count of commits not yet pushed on the session's repo; shown as ↑N (hidden when 0). Not a daemon field — compute it yourself.",
-      "examples": [3]
     },
     "active": {
       "type": "boolean",
       "default": false,
-      "description": "Whether this is the focused/active niri desktop. When true, the tile gets an accent 'card' (fill + border) to stand out from the others."
+      "description": "Whether this is the focused/active niri desktop → the accent 'card'."
     },
     "is_claude": {
       "type": "boolean",
       "default": true,
-      "description": "Whether this desktop runs a Claude session (true → the status/folder layout) or an ordinary window (false → the app-icon layout). For a niri desktop, derive from whether the daemon tracks a session on it."
+      "description": "true (or omitted) → a Claude desktop (uses `sessions`); false → an ordinary window (uses `app`/`app_icon`)."
+    },
+    "sessions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "description": "The Claude session(s) on this desktop (1 → single layout, 2 → stacked dual layout). Send the desktop's sessions; the tile adapts — you never pick the layout, the data does.",
+      "items": {
+        "type": "object",
+        "required": ["state"],
+        "additionalProperties": true,
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": ["working", "prompt", "idle", "shell"],
+            "description": "REAL (sessions.state). Drives this session's indicator: working=Claude mascot deep-orange, prompt=blinking '?' (and the WHOLE tile pulses if ANY session is prompt), idle=fade bar (see idle_level) + idle_ago, shell=mascot electric-cyan."
+          },
+          "idle_level": {
+            "type": "integer", "minimum": 0, "maximum": 6, "default": 0,
+            "description": "REAL-derived. Only when state=idle: 0=just idled (bright) .. 6=>60min (dim)."
+          },
+          "idle_ago": {
+            "type": "string",
+            "description": "REAL-derived. When state=idle: time since active (e.g. '12m'), beside the bar. Keep it short.",
+            "examples": ["12m", "2h"]
+          },
+          "folder": {
+            "type": "string",
+            "description": "REAL (basename of sessions.cwd).",
+            "examples": ["api", "worker"]
+          },
+          "title": {
+            "type": "string",
+            "description": "MOCK. The session window title. Wrapped (single-session) or tickered (dual).",
+            "examples": ["refactor the inline flow layout"]
+          },
+          "unpushed": {
+            "type": "integer", "minimum": 0,
+            "description": "MOCK. Unpushed commit count; shown as ↑N after the folder (hidden when 0 or idle)."
+          }
+        }
+      }
+    },
+    "title": {
+      "type": "string",
+      "description": "Used only when is_claude=false: the window title (shown wrapped under the app). Claude sessions carry their title inside sessions[].title instead.",
+      "examples": ["lib.rs — pwetty-box — Visual Studio Code"]
     },
     "app": {
       "type": "string",
-      "description": "Used only when is_claude=false: the app/window label shown beside its icon.",
+      "description": "Used only when is_claude=false: the app/window label.",
       "examples": ["Firefox", "VS Code"]
     },
     "app_icon": {
       "type": "string",
-      "description": "Used only when is_claude=false: the leftmost window's icon. Either a bundled icon name (e.g. 'code', 'terminal') or an absolute path to an .svg (contains '/'), e.g. a freedesktop app icon. The real 'infinite glyphs' case a font can't cover.",
+      "description": "Used only when is_claude=false: a bundled icon name (e.g. 'code') or an absolute path to an .svg.",
       "examples": ["code", "/usr/share/icons/hicolor/scalable/apps/firefox.svg"]
     }
   }

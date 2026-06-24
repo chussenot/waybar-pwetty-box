@@ -39,26 +39,8 @@ const CLAUDE: TilePreset = TilePreset {
         ("prompt", include_str!(tile_dir!("samples/prompt.json"))),
         ("idle", include_str!(tile_dir!("samples/idle.json"))),
         ("shell", include_str!(tile_dir!("samples/shell.json"))),
+        ("duo", include_str!(tile_dir!("samples/duo.json"))),
         ("window", include_str!(tile_dir!("samples/window.json"))),
-    ],
-};
-
-macro_rules! claude2_dir {
-    ($p:literal) => {
-        concat!("../../tiles/claude2/", $p)
-    };
-}
-
-/// Two Claude sessions stacked on one desktop (shared shortcut gutter).
-const CLAUDE2: TilePreset = TilePreset {
-    name: "claude2",
-    config: include_str!(claude2_dir!("tile.json")),
-    schema: include_str!(claude2_dir!("schema.json")),
-    doc: include_str!(claude2_dir!("README.md")),
-    samples: &[
-        ("duo", include_str!(claude2_dir!("samples/duo.json"))),
-        ("mixed", include_str!(claude2_dir!("samples/mixed.json"))),
-        ("single", include_str!(claude2_dir!("samples/single.json"))),
     ],
 };
 
@@ -81,7 +63,7 @@ const EMPTY: TilePreset = TilePreset {
 };
 
 /// All bundled presets.
-const PRESETS: &[TilePreset] = &[CLAUDE, CLAUDE2, EMPTY];
+const PRESETS: &[TilePreset] = &[CLAUDE, EMPTY];
 
 /// Look up a bundled preset by name.
 pub fn get(name: &str) -> Option<&'static TilePreset> {
@@ -103,19 +85,7 @@ mod tests {
         // Config and schema are valid JSON.
         serde_json::from_str::<serde_json::Value>(p.config).expect("config is JSON");
         serde_json::from_str::<serde_json::Value>(p.schema).expect("schema is JSON");
-        assert_eq!(p.samples.len(), 5);
-        for (name, json) in p.samples {
-            serde_json::from_str::<serde_json::Value>(json)
-                .unwrap_or_else(|e| panic!("sample {name} is JSON: {e}"));
-        }
-    }
-
-    #[test]
-    fn claude2_preset_is_registered_and_well_formed() {
-        let p = get("claude2").expect("claude2 preset present");
-        serde_json::from_str::<serde_json::Value>(p.config).expect("config is JSON");
-        serde_json::from_str::<serde_json::Value>(p.schema).expect("schema is JSON");
-        assert_eq!(p.samples.len(), 3);
+        assert_eq!(p.samples.len(), 6);
         for (name, json) in p.samples {
             serde_json::from_str::<serde_json::Value>(json)
                 .unwrap_or_else(|e| panic!("sample {name} is JSON: {e}"));

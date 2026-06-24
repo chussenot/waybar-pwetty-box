@@ -369,12 +369,19 @@ mod tests {
         assert!(s.starts_with("#version 300 es"));
         // bubble + alpha uniforms the renderer drives by name
         for u in [
-            "u_bx", "u_by", "u_bw", "u_bh", "u_radius", "u_fade", "u_falloff", "u_alpha",
+            "u_bx",
+            "u_by",
+            "u_bw",
+            "u_bh",
+            "u_radius",
+            "u_fade",
+            "u_falloff",
+            "u_alpha",
         ] {
             assert!(s.contains(u), "missing uniform {u}");
         }
         assert!(s.contains("_pw_sdbox")); // rounded-rect mask
-        // wrapper applies only the mask (cliff * slow); the preset owns u_alpha
+                                          // wrapper applies only the mask (cliff * slow); the preset owns u_alpha
         assert!(s.contains("c.a * cliff * slow"));
     }
 

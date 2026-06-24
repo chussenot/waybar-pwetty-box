@@ -1,108 +1,84 @@
 # `claude` tile
 
-A tall signage tile representing one niri desktop running a Claude session:
-shortcut number, an animated session-status indicator (the pixel-art Claude
-mascot), the folder name, an unpushed-commits badge, and the word-wrapped
-window title.
+One niri desktop, rendered from its data. **The tile is data-driven** — waybar
+always references `claude`; the template decides the layout from what you send,
+so you never have to tell waybar how many sessions a desktop has:
+
+- **1 session** → the rich single layout: big shortcut, status indicator, folder,
+  `↑unpushed`, and a wrapped title.
+- **2 sessions** → a stacked dual layout: the shared shortcut in a big left
+  gutter, each session a block (status + folder + `↑N`, then its title, tickered).
+- **a plain window** (`is_claude:false`) → the app's icon + name.
 
 ```
-┌──────────────────────────────────────────┐
-│ 5  ⬛  pwetty-box            ↑3           │   line 1: shortcut + status + folder + ↑commits
-│ refactor the inline flow layout and        │   line 2: title, word-wrapped (static,
-│ add wrapped-title support                  │            as many lines as it needs)
-└──────────────────────────────────────────┘
+single                          dual
+┌────────────────────────┐     ┌────────────────────────────┐
+│ 5  ⬛ pwetty-box   ↑3   │     │      ⬛ api            ↑3   │
+│ refactor the inline…   │     │ 5    refactor the flow…     │
+│                        │     │      ?  worker              │
+└────────────────────────┘     │      run: git push main?    │
+                               └────────────────────────────┘
 ```
 
 ## Using it
 
-The preset ships *inside* the module. A waybar module references it by name and
-adds only the data source — pwetty merges the preset underneath, and the
-module's own keys win:
-
 ```jsonc
-"cffi/pwetty#claude5": {
-  "module_path": ".../libpwetty_box.so",
-  "tile": "claude",          // <- this preset (geometry, fonts, template)
-  "interval": 2,
-  "exec": "claude-tile-data 5"   // <- your job: emit the JSON below on stdout
-}
-```
-
-Override any preset field inline (e.g. `"width": 360`). To iterate on the visual
-without rebuilding, point at a file instead: `"tile_file": "/path/tile.json"`.
-
-**For a snappy active-desktop highlight, use push mode.** Polling has a 1s floor,
-so the `active` card lags on a niri desktop switch. Set `"stream": true` and keep
-your producer alive, emitting one JSON line per change — pwetty repaints within
-~150ms of each line (no `interval` needed):
-
-```jsonc
-"cffi/pwetty#claude5": {
+"cffi/pwetty#5": {
   "module_path": ".../libpwetty_box.so",
   "tile": "claude",
-  "stream": true,                 // <- push, not poll
-  "exec": "claude-tile-watch 5"   // <- long-lived: prints a JSON line on every change
+  "stream": true,
+  "exec": "claude-status tile-watch 5"   // emit the JSON below
 }
 ```
 
-On EOF/exit pwetty keeps the last content and respawns after ~1s; blank lines are
-skipped. (Omit `stream` for the simple poll path — set `interval` instead.)
+**Bar height.** A two-session desktop is taller than a one-session one, and a
+waybar bar is a single shared height — so size the bar for the dual case
+(**~96px** at the default font; the preset's own default). One-session and window
+tiles simply use the extra room. Set `"height"` once on the bar.
 
 ## The data contract
 
-The `exec` stdout (or static `text`) must be a JSON object matching
-[`schema.json`](./schema.json). Fields:
+`exec` stdout (or static `text`) is a JSON object matching
+[`schema.json`](./schema.json).
 
-| field        | type            | source | notes |
-|--------------|-----------------|--------|-------|
-| `shortcut`   | integer/string  | MOCK   | desktop shortcut number, shown first |
-| `state`      | enum            | REAL   | `working` \| `prompt` \| `idle` \| `shell` — drives the indicator |
-| `idle_level` | integer 0–6     | REAL-derived | only used when `state=idle`; 0=just-idled (white) → 6=>60min (dim) |
-| `folder`     | string          | REAL   | basename of the session `cwd` |
-| `title`      | string          | MOCK   | window title; word-wrapped on line 2 (static) |
-| `unpushed`   | integer         | MOCK   | unpushed commit count; shown as `↑N` after the folder, hidden when 0 or when idle |
-| `idle_ago`   | string          | REAL-derived | when `state=idle`: "time since active", e.g. `12m`; shown as a readable label beside the idle bars (mild K-2000 red). Keep it short. |
-| `active`     | boolean         | niri   | focused desktop → an accent "card" (fill + border) so it stands out |
-| `is_claude`  | boolean         | derive | `true` → the status/folder layout; `false` → the app-icon layout (below) |
-| `app`        | string          | window | `is_claude=false` only: the app/window label |
-| `app_icon`   | string          | window | `is_claude=false` only: a bundled icon name or an absolute `.svg` path |
+| field       | type        | source | notes |
+|-------------|-------------|--------|-------|
+| `shortcut`  | int/string  | MOCK   | desktop number, shown first (gutter when dual) |
+| `active`    | boolean     | niri   | focused desktop → accent card |
+| `is_claude` | boolean     | derive | omit/`true` → a Claude desktop (`sessions`); `false` → a window (`app`/`app_icon`) |
+| `sessions`  | array (1–2) | —      | the session(s); **required for a Claude desktop** |
+| `app`       | string      | window | `is_claude:false` only: app/window label |
+| `app_icon`  | string      | window | `is_claude:false` only: bundled icon name or absolute `.svg` path |
+| `title`     | string      | window | `is_claude:false` only: window title |
 
-REAL = available from `~/Perso/claude-status-db` (sessions row). MOCK = not a
-session field yet; synthesize it. `state` values are the daemon's own strings.
+Each `sessions[]` entry:
 
-**Two layouts.** A claude desktop (`is_claude=true`, the default) shows the
-status indicator + folder (+ `idle_ago` when idle). A plain desktop
-(`is_claude=false`) shows the leftmost window's **app icon** + `app` label
-instead — `app_icon` is a bundled icon name (e.g. `code`) or a path to any
-`.svg` (e.g. a freedesktop app icon). Both layouts share the line-2 word-wrapped title.
+| field        | type        | source       | notes |
+|--------------|-------------|--------------|-------|
+| `state`      | enum        | REAL         | `working` \| `prompt` \| `idle` \| `shell` — drives the indicator |
+| `folder`     | string      | REAL         | basename of the session `cwd` |
+| `title`      | string      | MOCK         | window title (wrapped when single, tickered when dual) |
+| `unpushed`   | integer     | MOCK         | `↑N` after the folder; hidden when 0 or idle |
+| `idle_level` | integer 0–6 | REAL-derived | when `state=idle`: bright (0) → dim (6) |
+| `idle_ago`   | string      | REAL-derived | when `state=idle`: e.g. `12m`, beside the bar |
 
-The indicator: `working` → the **Claude mascot** in deep orange, slow blink +
-color-matched glow; `prompt` → a blinking yellow `?` (and the *whole tile*
-pulses, to pull your eye); `shell` → the **Claude mascot** in electric cyan,
-pulsing + glow; `idle` → a static two-cell bar that fades white→grey with
-`idle_level`, with `idle_ago` (e.g. `12m`) shown as a readable label beside the
-bars in a mild K-2000 red. (Idle/empty tiles are fully static — they don't repaint,
-keeping the bar cool; only `working`/`prompt`/`shell` animate.)
+Indicators: `working`→deep-orange Claude mascot, `shell`→electric-cyan mascot,
+`idle`→fade bar + `idle_ago`, `prompt`→blinking `?`. If **any** session is
+`prompt`, the **whole tile pulses** (one attention signal per desktop).
+
+> **Migration note.** The contract moved from flat per-session fields to a
+> `sessions` array. A single session is now `"sessions": [ { … } ]` (was the
+> fields at top level). Window payloads are unchanged.
 
 ## Inspecting / previewing
 
 ```bash
-pwetty list                 # bundled tiles
-pwetty schema claude        # print this tile's JSON Schema (the contract)
-pwetty check claude         # validate template ↔ schema ↔ samples
-pwetty render claude --all-states -o /tmp/claude   # PNGs of every bundled sample
-
-# ↓ the loop for building the data: render YOUR OWN json and eyeball it
-echo '{"shortcut":5,"state":"working","folder":"api","title":"…","unpushed":2}' \
+pwetty schema claude
+pwetty check claude
+pwetty render claude --all-states -o /tmp/claude        # PNGs of every sample
+echo '{"shortcut":5,"sessions":[{"state":"working","folder":"api"}]}' \
   | pwetty render claude --data - -o /tmp/claude
-pwetty render claude --data ./my-payload.json -o /tmp/claude
 ```
 
-`--data` is the key tool for the data layer: emit the JSON you plan to feed via
-`exec`, pipe it through `render --data`, and confirm the tile looks right before
-wiring it into waybar. Required fields depend on the layout (the schema's
-`if/then`): a Claude tile needs `state`; a window tile (`is_claude:false`) needs
-`app_icon`+`app`; only `shortcut` is always required.
-
-Sample payloads live in [`samples/`](./samples/) — one per state, used by
-`pwetty check`/`render` and the test suite.
+Samples in [`samples/`](./samples/): `working`, `prompt`, `idle`, `shell` (single
+sessions), `duo` (two sessions), `window` (a plain window).

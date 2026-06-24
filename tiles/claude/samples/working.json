@@ -1,8 +1,7 @@
 {
   "shortcut": 5,
   "active": true,
-  "state": "working",
-  "folder": "pwetty-box",
-  "title": "refactor the inline flow layout and add wrapped-title support",
-  "unpushed": 3
+  "sessions": [
+    { "state": "working", "folder": "pwetty-box", "title": "refactor the inline flow layout and add wrapped-title support", "unpushed": 3 }
+  ]
 }

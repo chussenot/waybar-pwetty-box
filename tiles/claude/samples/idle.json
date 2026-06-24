@@ -1,9 +1,6 @@
 {
   "shortcut": 7,
-  "state": "idle",
-  "idle_level": 3,
-  "idle_ago": "12m",
-  "folder": "dotfiles",
-  "title": "nvim ~/.config/niri/config.kdl",
-  "unpushed": 0
+  "sessions": [
+    { "state": "idle", "idle_level": 3, "idle_ago": "12m", "folder": "dotfiles", "title": "nvim ~/.config/niri/config.kdl", "unpushed": 0 }
+  ]
 }

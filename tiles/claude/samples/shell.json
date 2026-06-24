@@ -1,7 +1,6 @@
 {
   "shortcut": 9,
-  "state": "shell",
-  "folder": "infra",
-  "title": "tail -f /var/log/deploy.log — watching the rollout",
-  "unpushed": 12
+  "sessions": [
+    { "state": "shell", "folder": "infra", "title": "tail -f /var/log/deploy.log — watching the rollout", "unpushed": 12 }
+  ]
 }

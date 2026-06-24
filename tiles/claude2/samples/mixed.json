@@ -1,8 +1,0 @@
-{
-  "shortcut": 2,
-  "active": false,
-  "sessions": [
-    { "state": "shell", "folder": "infra", "unpushed": 12, "title": "tail -f /var/log/deploy.log" },
-    { "state": "idle", "idle_level": 3, "idle_ago": "1h", "folder": "dotfiles", "title": "nvim ~/.config/niri/config.kdl" }
-  ]
-}
