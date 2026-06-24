@@ -31,15 +31,29 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
     vec3 col = mix(vec3(0.02, 0.04, 0.10), vec3(0.05, 0.09, 0.21), uv.y);
     float n = fbm(p * 3.0 + vec2(iTime * 0.03, iTime * 0.015));
     col += vec3(0.10, 0.16, 0.34) * pow(n, 2.0) * 0.7;
-    // Stars: fewer, larger cells -> bigger multi-pixel dots; near-max brightness
-    // with only a gentle, slow twinkle (so they read as bright points, not noise).
-    vec2 g = vec2(uv.x * ar, uv.y) * 38.0;
-    vec2 gi = floor(g); float st = hash(gi);
-    if (st > 0.93) {
-        float d = length(fract(g) - 0.5);
-        float tw = 0.72 + 0.28 * sin(iTime * 0.8 + st * 30.0);
-        float dot = smoothstep(0.42, 0.06, d);
-        col += star_color() * dot * tw;
+    // Stars on a square cell grid. Each lit cell gets:
+    //   - a per-star size in *device px* — most ~1px, some ~2px (a hash picks);
+    //   - an independent twinkle (per-star rate + phase) with a WIDE amplitude
+    //     so the blink is clearly visible, still peaking at full brightness;
+    //   - scintillation: a per-star colour shimmering cool<->warm around the
+    //     base star colour, so the field has subtle colour variety.
+    float cells = 38.0;
+    vec2 g = vec2(uv.x * ar, uv.y) * cells;
+    vec2 gi = floor(g);
+    float st = hash(gi);
+    if (st > 0.92) {
+        float cellpx = iResolution.y / cells;             // device px per cell
+        float dpx = length(fract(g) - 0.5) * cellpx;      // px from star centre
+        float rad = (hash(gi + 11.3) > 0.62) ? 1.0 : 0.5; // ~2px vs ~1px stars
+        float dot = 1.0 - smoothstep(rad - 0.5, rad + 0.5, dpx);
+        float ph  = st * 40.0;
+        float spd = 0.5 + 1.6 * hash(gi + 3.7);           // some twinkle faster
+        float tw  = 0.25 + 0.75 * (0.5 + 0.5 * sin(iTime * spd + ph)); // 0.25..1.0
+        float warm = hash(gi + 5.1);                      // per-star hue bias
+        vec3 chroma = mix(vec3(0.72, 0.84, 1.12), vec3(1.12, 0.96, 0.78), warm);
+        vec3 sc = clamp(star_color() * chroma, 0.0, 1.0);
+        sc *= 0.90 + 0.10 * sin(iTime * spd * 1.6 + ph * 1.3); // colour shimmer
+        col += sc * dot * tw;
     }
     fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
