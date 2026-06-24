@@ -843,6 +843,14 @@ const IDLE_LEVELS: [&str; 7] = [
     "#ffffff", "#d8d8d8", "#b0b0b0", "#888888", "#686868", "#505050", "#3a3a3a",
 ];
 
+/// Slow glow behind a recently-idle indicator — so the decay cells read as
+/// "recently here", not a dead pause symbol. Coloured like the cells (white when
+/// fresh), it pulses slowly, fades as idleness grows, and switches off entirely
+/// past the one-hour mark (the dimmest level), where the tile goes static again.
+const IDLE_GLOW_PERIOD: f64 = 3.4; // slow blink, seconds
+const IDLE_GLOW_MAX: f64 = 0.5; // peak alpha when freshly idle
+const IDLE_GLOW_FLOOR: f64 = 0.3; // mid-blink floor (within the hour)
+
 /// Set the Cairo source to a hex colour, multiplying its alpha by `alpha_mul`.
 fn set_hex(cr: &gtk::cairo::Context, hex: &str, alpha_mul: f64) {
     if let Some(c) = render::parse_hex_color(hex) {
@@ -899,10 +907,19 @@ fn draw_status(
                 .unwrap_or(0)
                 .min(IDLE_LEVELS.len() - 1);
             let ago = attr(attrs, "ago").unwrap_or("");
-            if ago.is_empty() {
-                draw_idle_cells(cr, cx, cy, cap_h, IDLE_LEVELS[level]);
+            // Slow glow for the first hour (levels 0..=5), fading with age; off at
+            // the dimmest level. Coloured like the cells, so it's white when fresh.
+            let last = IDLE_LEVELS.len() - 1;
+            let glow_a = if level < last {
+                let recency = 1.0 - level as f64 / last as f64;
+                osc(time, IDLE_GLOW_PERIOD, IDLE_GLOW_FLOOR) * IDLE_GLOW_MAX * recency
             } else {
-                draw_idle_badge(cr, cx, cy, cap_h, IDLE_LEVELS[level], ago);
+                0.0
+            };
+            if ago.is_empty() {
+                draw_idle_cells(cr, cx, cy, cap_h, IDLE_LEVELS[level], glow_a);
+            } else {
+                draw_idle_badge(cr, cx, cy, cap_h, IDLE_LEVELS[level], ago, glow_a);
             }
         }
         // An empty desktop: a dim hollow ring (no activity), digit-sized.
@@ -1209,7 +1226,18 @@ fn draw_glyph_centered(
 /// Draw the idle indicator: two rounded cells of height `cap_h` in `hex` (the
 /// level colour), centered at `(cx, cap_cy)` — evoking the `██`/`░░` decay bar,
 /// sized to the digit beside it.
-fn draw_idle_cells(cr: &gtk::cairo::Context, cx: f64, cap_cy: f64, cap_h: f64, hex: &str) {
+fn draw_idle_cells(
+    cr: &gtk::cairo::Context,
+    cx: f64,
+    cap_cy: f64,
+    cap_h: f64,
+    hex: &str,
+    glow_a: f64,
+) {
+    // A soft, cell-coloured glow behind the cells (recently-idle cue).
+    if glow_a > 0.001 {
+        glow_halo(cr, cx, cap_cy, cap_h * 1.3, hex, glow_a);
+    }
     let cw = cap_h * 0.42;
     let gap = cap_h * 0.24;
     let total = cw * 2.0 + gap;
@@ -1229,13 +1257,21 @@ fn draw_idle_cells(cr: &gtk::cairo::Context, cx: f64, cap_cy: f64, cap_h: f64, h
 /// tiles stay cheap). The whole badge lives in the status embed's reserved width,
 /// so the time never spills into the folder/next tile. (An earlier version arced
 /// the time over the bars, but that's illegible in a short bar — readability wins.)
-fn draw_idle_badge(cr: &gtk::cairo::Context, cx: f64, cy: f64, cap_h: f64, hex: &str, ago: &str) {
+fn draw_idle_badge(
+    cr: &gtk::cairo::Context,
+    cx: f64,
+    cy: f64,
+    cap_h: f64,
+    hex: &str,
+    ago: &str,
+    glow_a: f64,
+) {
     // The box is `cap_h * 3.0` wide (see `embed_ew`), centred on `cx`. Put the
     // bars at the left, the time filling the rest.
     let ew = cap_h * 3.0;
     let left = cx - ew / 2.0;
     let bar_cx = left + cap_h * 0.55;
-    draw_idle_cells(cr, bar_cx, cy, cap_h, hex);
+    draw_idle_cells(cr, bar_cx, cy, cap_h, hex, glow_a);
 
     let fs = cap_h * 0.92; // big enough to actually read at tile scale
     if fs < 4.0 || ago.is_empty() {

@@ -55,7 +55,12 @@ pub fn content_animates(markup: &str) -> bool {
     let has_state = |s: &str| {
         markup.contains(&format!("state='{s}'")) || markup.contains(&format!("state=\"{s}\""))
     };
-    has_state("working")
+    // A recently-idle indicator glows (slow pulse) through the first hour, then
+    // goes static at the dimmest level (level 6) — so it animates unless it's 6.
+    let idle_recent =
+        has_state("idle") && !markup.contains("level='6'") && !markup.contains("level=\"6\"");
+    idle_recent
+        || has_state("working")
         || has_state("prompt")
         || has_state("shell")
         || markup.contains("<pulse")
@@ -304,8 +309,9 @@ mod tests {
         assert!(content_animates("<status state=\"shell\"/>"));
         assert!(content_animates("a <tickerbox>x</tickerbox>"));
         assert!(content_animates("<pulse>x</pulse>"));
-        // Static states / plain content do NOT animate.
-        assert!(!content_animates("<status state='idle' level='2'/>"));
+        // Recently-idle glows (first hour); the dimmest level + plain content don't.
+        assert!(content_animates("<status state='idle' level='2'/>"));
+        assert!(!content_animates("<status state='idle' level='6'/>"));
         assert!(!content_animates("just text, folder named working"));
     }
 
