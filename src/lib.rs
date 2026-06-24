@@ -848,8 +848,8 @@ const IDLE_LEVELS: [&str; 7] = [
 /// fresh), it pulses slowly, fades as idleness grows, and switches off entirely
 /// past the one-hour mark (the dimmest level), where the tile goes static again.
 const IDLE_GLOW_PERIOD: f64 = 3.4; // slow blink, seconds
-const IDLE_GLOW_MAX: f64 = 0.5; // peak alpha when freshly idle
-const IDLE_GLOW_FLOOR: f64 = 0.3; // mid-blink floor (within the hour)
+const IDLE_GLOW_MAX: f64 = 0.6; // peak alpha when freshly idle
+const IDLE_GLOW_FLOOR: f64 = 0.45; // mid-blink floor — stays a glow, not a flash
 
 /// Set the Cairo source to a hex colour, multiplying its alpha by `alpha_mul`.
 fn set_hex(cr: &gtk::cairo::Context, hex: &str, alpha_mul: f64) {
@@ -911,7 +911,9 @@ fn draw_status(
             // the dimmest level. Coloured like the cells, so it's white when fresh.
             let last = IDLE_LEVELS.len() - 1;
             let glow_a = if level < last {
-                let recency = 1.0 - level as f64 / last as f64;
+                // Gentle fade across the hour (1.0 → ~0.5), not a cliff — so it
+                // glows fairly evenly through the first hour, off at the last level.
+                let recency = 1.0 - 0.5 * level as f64 / last as f64;
                 osc(time, IDLE_GLOW_PERIOD, IDLE_GLOW_FLOOR) * IDLE_GLOW_MAX * recency
             } else {
                 0.0
@@ -1234,9 +1236,12 @@ fn draw_idle_cells(
     hex: &str,
     glow_a: f64,
 ) {
-    // A soft, cell-coloured glow behind the cells (recently-idle cue).
+    // A soft glow behind the cells (recently-idle cue) — always WHITE, never the
+    // cell colour: the cells grey out within minutes and a grey glow on a dark bar
+    // is invisible. White stays visible across the whole hour; only the alpha
+    // fades. Wide radius so it reads as a halo even when the cells are small.
     if glow_a > 0.001 {
-        glow_halo(cr, cx, cap_cy, cap_h * 1.3, hex, glow_a);
+        glow_halo(cr, cx, cap_cy, cap_h * 1.9, "#ffffff", glow_a);
     }
     let cw = cap_h * 0.42;
     let gap = cap_h * 0.24;
