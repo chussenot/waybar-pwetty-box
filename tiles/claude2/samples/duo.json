@@ -1,0 +1,8 @@
+{
+  "shortcut": 5,
+  "active": true,
+  "sessions": [
+    { "state": "working", "folder": "api", "unpushed": 3, "title": "refactor the inline flow layout" },
+    { "state": "prompt", "folder": "worker", "title": "run: git push origin main?" }
+  ]
+}

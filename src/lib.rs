@@ -400,7 +400,7 @@ const EFFECT_TAGS: &[&str] = &["box", "glow"];
 /// spacer that draws nothing — its purpose is to *split a text run*, so adjacent
 /// differently-sized spans each get independently vertically-centered (a single
 /// Pango run would baseline-align them instead).
-const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon", "sep", "wrap"];
+const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon", "sep", "wrap", "gutter"];
 
 /// Default redraw rate for auto-animated tiles (blink/pulse/ticker) when the
 /// config doesn't pin `fps`. Below the monitor's 60Hz but smooth (the per-frame
@@ -643,13 +643,15 @@ fn draw_flow(
     let center = config.align.as_deref() == Some("center");
     let lines = flow_layout(&processed.markup);
 
-    // A leading `<icon hero/>` becomes a big left gutter; the text lines indent
-    // past it. Lets a window tile show a prominent app icon with the header +
-    // wrapped title to its right. Detected here (so `left` feeds the wrap width)
-    // but drawn after the block height is known, so it centers on the content.
+    // A leading `<icon hero/>` or `<gutter>…</gutter>` becomes a big left gutter;
+    // the text lines indent past it. Lets a window tile show a prominent app icon,
+    // or a multi-session tile show one big shared shortcut, with the rows to its
+    // right. Detected here (so `left` feeds the wrap width) but drawn after the
+    // block height is known, so it centers on the whole content block.
     let mut left = pad;
-    let mut hero = false;
+    let mut hero = false; // a leading gutter element occupies line0[0]
     let mut hero_draw: Option<(&markup::Embed, f64)> = None;
+    let mut gutter_draw: Option<(pango::Layout, f64, f64)> = None; // (layout, ink_top, ink_h)
     if let Some(FlowItem::Embed(idx)) = lines.first().and_then(|l| l.first()) {
         if let Some(e) = processed.embeds.get(*idx) {
             if e.tag == "icon" && attr(&e.attrs, "hero").is_some() {
@@ -657,6 +659,16 @@ fn draw_flow(
                 left = pad + hero_h + config.font_size as f64 * 0.5;
                 hero = true;
                 hero_draw = Some((e, hero_h));
+            } else if e.tag == "gutter" {
+                // Big text gutter (e.g. a shared shortcut digit). Its size comes
+                // from the inner markup's span; we measure it to set the indent.
+                let (layout, _oy, gw) = text::layout_line(cr, &e.inner, line_h, style);
+                let (ink_top, ink_h) =
+                    text::ink_extent(&e.inner, &style.font_family, config.font_size as f64)
+                        .unwrap_or((0.0, line_h));
+                left = pad + gw + config.font_size as f64 * 0.5;
+                hero = true;
+                gutter_draw = Some((layout, ink_top, ink_h));
             }
         }
     }
@@ -697,6 +709,11 @@ fn draw_flow(
     if let Some((e, hero_h)) = hero_draw {
         let cy = (top_pad + total / 2.0).clamp(hero_h / 2.0, h - hero_h / 2.0);
         draw_icon(cr, &e.attrs, pad + hero_h / 2.0, cy, hero_h, scale);
+    }
+    // Big text gutter, ink-centered on the content block at the left pad.
+    if let Some((layout, ink_top, ink_h)) = &gutter_draw {
+        let cy = top_pad + total / 2.0;
+        text::paint(cr, layout, pad, cy - ink_top - ink_h / 2.0, style);
     }
 
     for (li, items) in lines.iter().enumerate() {

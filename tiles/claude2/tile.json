@@ -1,0 +1,8 @@
+{
+  "width": 210,
+  "height": 78,
+  "fps": 0,
+  "font_size": 13,
+  "font_family": "Terminus",
+  "format": "{% if active %}<active/>{% endif %}{% set prompting = sessions[0].state == 'prompt' or (sessions | length > 1 and sessions[1].state == 'prompt') %}{% if prompting %}<pulse>{% endif %}<gutter><span size='240%' weight='bold' foreground='#cdd6f4'>{{ shortcut }}</span></gutter>{% for s in sessions %}<status state=\"{{ s.state }}\" level=\"{{ s.idle_level | default(0) }}\" ago=\"{{ s.idle_ago | default('') }}\"/> <span weight='bold' foreground='#89b4fa'>{{ s.folder }}</span>{% if s.unpushed and s.state != 'idle' %} <span weight='bold' foreground='#a6e3a1'>↑{{ s.unpushed }}</span>{% endif %}\n<tickerbox width=\"150\"><span size='small' foreground='#cdd6f4'>{{ s.title | default('') }}</span></tickerbox>{% if not loop.last %}\n{% endif %}{% endfor %}{% if prompting %}</pulse>{% endif %}"
+}

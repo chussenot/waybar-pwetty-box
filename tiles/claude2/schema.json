@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "pwetty:tile/claude2",
+  "title": "claude2 tile data",
+  "description": "Data for the bundled `claude2` tile: one niri desktop running TWO Claude sessions, stacked. Feed it as the module's `exec` stdout (JSON) or static `text`. The shared `shortcut` sits in a left gutter; each entry of `sessions` becomes one session block (status + folder + unpushed, then its title). Per-session fields mirror the single `claude` tile.",
+  "type": "object",
+  "required": ["shortcut", "sessions"],
+  "additionalProperties": true,
+  "properties": {
+    "shortcut": {
+      "type": ["integer", "string"],
+      "description": "MOCK. The niri desktop's shortcut number, shown big in the shared left gutter.",
+      "examples": [5]
+    },
+    "active": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this is the focused/active niri desktop. When true, the tile gets the accent 'card'."
+    },
+    "sessions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "description": "The Claude sessions on this desktop (1 or 2). Each renders as a stacked block: status indicator + folder + unpushed badge, then a title line.",
+      "items": {
+        "type": "object",
+        "required": ["state"],
+        "additionalProperties": true,
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": ["working", "prompt", "idle", "shell"],
+            "description": "REAL (sessions.state). Drives this session's <status> indicator: working=Claude mascot in deep orange, prompt=blinking '?' (and the WHOLE tile pulses if ANY session is prompt), idle=fade bar (see idle_level) + idle_ago, shell=mascot in electric cyan."
+          },
+          "idle_level": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6,
+            "default": 0,
+            "description": "REAL-derived. Only meaningful when state=idle: 0=just idled (bright) .. 6=>60min (dim)."
+          },
+          "idle_ago": {
+            "type": "string",
+            "description": "REAL-derived. Shown beside the idle bar (e.g. '12m'). Keep it short.",
+            "examples": ["12m", "2h"]
+          },
+          "folder": {
+            "type": "string",
+            "description": "REAL (basename of sessions.cwd). The session's working-directory name.",
+            "examples": ["api", "worker"]
+          },
+          "title": {
+            "type": "string",
+            "description": "MOCK. The session's window title, shown on its own line (tickers if it overflows).",
+            "examples": ["refactor the inline flow layout"]
+          },
+          "unpushed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "MOCK. Unpushed commit count; shown as ↑N after the folder (hidden when 0 or idle)."
+          }
+        }
+      }
+    }
+  }
+}
