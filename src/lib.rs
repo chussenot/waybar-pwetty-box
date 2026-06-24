@@ -663,9 +663,10 @@ fn draw_flow(
                 // Big text gutter (e.g. a shared shortcut digit). Its size comes
                 // from the inner markup's span; we measure it to set the indent.
                 let (layout, _oy, gw) = text::layout_line(cr, &e.inner, line_h, style);
+                // Cached (run_ink): ink_extent rasterizes + scans, and this runs
+                // every frame on an animating dual tile — uncached, it crawls.
                 let (ink_top, ink_h) =
-                    text::ink_extent(&e.inner, &style.font_family, config.font_size as f64)
-                        .unwrap_or((0.0, line_h));
+                    run_ink(&e.inner, &style.font_family, config.font_size as f64);
                 left = pad + gw + config.font_size as f64 * 0.5;
                 hero = true;
                 gutter_draw = Some((layout, ink_top, ink_h));
@@ -1199,8 +1200,8 @@ fn draw_glyph_centered(
     // Use the TRULY-rendered ink (font-robust, incl. bitmap fonts) to center —
     // the same metric the neighbouring digit uses, so they line up. Pango's
     // pixel_extents lie for bitmap fonts and would misalign the glyph.
-    let (ink_top, ink_h) = text::ink_extent(&markup, family, style.size_px)
-        .unwrap_or((0.0, layout.pixel_size().1 as f64));
+    // Cached (run_ink): this runs every frame for the blinking prompt '?'.
+    let (ink_top, ink_h) = run_ink(&markup, family, style.size_px);
     let y = cy - ink_top - ink_h / 2.0;
     text::paint(cr, &layout, cx - lw / 2.0, y, &style);
 }
