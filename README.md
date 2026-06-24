@@ -275,8 +275,11 @@ fade** — a graphical accent for *some* tiles, not a show-off.
 `night` specifics: `alpha` controls only the **blue field** (gradient + nebula);
 the **stars carry their own opacity** (`stars_alpha`, default `0.9`) so they stay
 crisp while the field is faint. `stars="#rrggbb"` tints the stars (clamped,
-defaults to cool blue-white) — a *very mild* attention signal (warm stars = "look
-here") that doesn't recolour the whole tile.
+defaults to cool blue-white). `stars_gain` (default `1`) lifts star brightness +
+persistence: crank it with `stars_alpha="1"` and a warm `stars` colour to turn
+the calm field into an actual **attention grab** — e.g.
+`<bg preset='night' stars='#ffb84d' stars_alpha='1' stars_gain='2.6'/>`, pairing
+nicely with `<pulse>` on a tile that wants your eye.
 
 The mask mirrors the focus bubble exactly (one shared `focus_bubble()`), so it
 lines up with the active-card border. Like any shader it repaints per frame

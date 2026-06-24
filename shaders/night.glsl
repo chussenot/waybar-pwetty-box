@@ -16,6 +16,10 @@ uniform float stars_r; uniform float stars_g; uniform float stars_b;
 // background can stay subtle while the stars read strongly. Defaults to 0.9 when
 // unset; override via <bg preset="night" stars_alpha="0.7"/>.
 uniform float stars_alpha;
+// Brightness/persistence gain on the twinkle (default 1). >1 lifts stars so they
+// burn brighter and stay lit more of the time (keeping their hue) — turn this up
+// (with stars_alpha) to make the tinted stars an actual attention grab.
+uniform float stars_gain;
 
 // Invariants the star colour always satisfies, whatever uniforms arrive:
 //   1. clamped to a valid [0,1] colour (no HDR blow-out, no negatives);
@@ -61,7 +65,8 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         // Strong scintillation: swing from near-invisible to full bright, biased
         // toward the dim end (pow) so stars spend most time faint and briefly flare.
         float pulse = 0.5 + 0.5 * sin(iTime * spd + ph);
-        float tw  = pow(pulse, 1.7);                      // ~0 .. 1
+        float gain = (stars_gain > 0.001) ? stars_gain : 1.0;
+        float tw   = clamp(pow(pulse, 1.7) * gain, 0.0, 1.0); // gain>1 -> brighter, more lit
         float warm = hash(gi + 5.1);                      // per-star hue bias
         vec3 chroma = mix(vec3(0.72, 0.84, 1.12), vec3(1.12, 0.96, 0.78), warm);
         starCol = clamp(star_color() * chroma, 0.0, 1.0);
