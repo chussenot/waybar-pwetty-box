@@ -958,6 +958,10 @@ fn draw_bg(cr: &gtk::cairo::Context, w: f64, h: f64, bg: &markup::BgSpec, fx: &m
         ("u_bh".into(), bh as f32 * s),
         ("u_radius".into(), r as f32 * s),
         ("u_fade".into(), BG_FADE * s),
+        // Slow vignette radius: default to the bubble's short half-extent so the
+        // layer is brightest deep inside and gently fades out toward the edges,
+        // independent of (and stacked under) the steep `u_fade` edge cliff.
+        ("u_falloff".into(), (bw.min(bh) * 0.5) as f32 * s),
         ("u_alpha".into(), BG_ALPHA),
     ];
     for (k, v) in &bg.attrs {
@@ -971,6 +975,11 @@ fn draw_bg(cr: &gtk::cairo::Context, w: f64, h: f64, bg: &markup::BgSpec, fx: &m
             "fade" => {
                 if let Ok(f) = v.parse::<f32>() {
                     uniforms.push(("u_fade".into(), f * s));
+                }
+            }
+            "falloff" => {
+                if let Ok(f) = v.parse::<f32>() {
+                    uniforms.push(("u_falloff".into(), f * s));
                 }
             }
             // A hex colour expands to three `name_r/g/b` float uniforms (so a

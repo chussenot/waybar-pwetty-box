@@ -146,7 +146,7 @@ pub fn wrap_fragment_masked(user: &str) -> String {
          uniform float iTime;\n\
          uniform int iFrame;\n\
          uniform float u_bx; uniform float u_by; uniform float u_bw; uniform float u_bh;\n\
-         uniform float u_radius; uniform float u_fade; uniform float u_alpha;\n\
+         uniform float u_radius; uniform float u_fade; uniform float u_falloff; uniform float u_alpha;\n\
          out vec4 _pwetty_fragColor;\n\
          {user}\n\
          float _pw_sdbox(vec2 p, vec2 b, float r) {{\n\
@@ -157,9 +157,14 @@ pub fn wrap_fragment_masked(user: &str) -> String {
              vec4 c; mainImage(c, gl_FragCoord.xy);\n\
              vec2 ctr = vec2(u_bx + u_bw * 0.5, u_by + u_bh * 0.5);\n\
              vec2 hlf = vec2(u_bw * 0.5, u_bh * 0.5);\n\
-             float d = _pw_sdbox(gl_FragCoord.xy - ctr, hlf, u_radius);\n\
-             float mask = clamp(-d / max(u_fade, 1.0), 0.0, 1.0);\n\
-             _pwetty_fragColor = vec4(c.rgb, c.a * u_alpha * mask);\n\
+             float dist = -_pw_sdbox(gl_FragCoord.xy - ctr, hlf, u_radius);\n\
+             // Two stacked fades, both on inside-distance from the bubble edge:\n\
+             //   cliff = a steep cut over u_fade px right at the edge (clean boundary);\n\
+             //   slow  = a gentle ramp over a much larger u_falloff px (a soft vignette,\n\
+             //           brightest deep inside, dimming out toward the edge).\n\
+             float cliff = clamp(dist / max(u_fade, 1.0), 0.0, 1.0);\n\
+             float slow  = clamp(dist / max(u_falloff, 1.0), 0.0, 1.0);\n\
+             _pwetty_fragColor = vec4(c.rgb, c.a * u_alpha * cliff * slow);\n\
          }}\n"
     )
 }
@@ -361,11 +366,14 @@ mod tests {
         let s = wrap_fragment_masked("void mainImage(out vec4 c, in vec2 p){ c = vec4(1.0); }");
         assert!(s.starts_with("#version 300 es"));
         // bubble + alpha uniforms the renderer drives by name
-        for u in ["u_bx", "u_by", "u_bw", "u_bh", "u_radius", "u_fade", "u_alpha"] {
+        for u in [
+            "u_bx", "u_by", "u_bw", "u_bh", "u_radius", "u_fade", "u_falloff", "u_alpha",
+        ] {
             assert!(s.contains(u), "missing uniform {u}");
         }
         assert!(s.contains("_pw_sdbox")); // rounded-rect mask
-        assert!(s.contains("c.a * u_alpha * mask")); // alpha = shader * overall * mask
+        // alpha = shader * overall * steep-edge-cliff * slow-falloff
+        assert!(s.contains("c.a * u_alpha * cliff * slow"));
     }
 
     #[test]

@@ -48,7 +48,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         float dot = 1.0 - smoothstep(rad - 0.5, rad + 0.5, dpx);
         float ph  = st * 40.0;
         float spd = 0.5 + 1.6 * hash(gi + 3.7);           // some twinkle faster
-        float tw  = 0.25 + 0.75 * (0.5 + 0.5 * sin(iTime * spd + ph)); // 0.25..1.0
+        // Strong scintillation: swing from near-invisible to full bright, biased
+        // toward the dim end (pow) so stars spend most time faint and briefly flare.
+        float pulse = 0.5 + 0.5 * sin(iTime * spd + ph);
+        float tw  = pow(pulse, 1.7);                      // ~0 .. 1
         float warm = hash(gi + 5.1);                      // per-star hue bias
         vec3 chroma = mix(vec3(0.72, 0.84, 1.12), vec3(1.12, 0.96, 0.78), warm);
         vec3 sc = clamp(star_color() * chroma, 0.0, 1.0);
