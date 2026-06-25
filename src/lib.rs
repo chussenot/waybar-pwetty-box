@@ -610,9 +610,19 @@ fn embed_ew(tag: &str, attrs: &[(String, String)], cap_h: f64) -> f64 {
         // An idle badge carrying an `ago` time needs extra width for the arc
         // that circles the bars; a plain status (dot/face/cells) is narrower.
         "status" => {
-            let idle_ago = attr(attrs, "state") == Some("idle")
-                && attr(attrs, "ago").is_some_and(|s| !s.is_empty());
-            embed_width(attrs, cap_h * if idle_ago { 3.0 } else { 1.7 })
+            let state = attr(attrs, "state");
+            let idle_ago =
+                state == Some("idle") && attr(attrs, "ago").is_some_and(|s| !s.is_empty());
+            // The mascot (working/shell) is a wide sprite drawn at ~digit height,
+            // so it needs a wider slot than a dot/`?`/idle cells would.
+            let mult = if idle_ago {
+                3.0
+            } else if matches!(state, Some("working") | Some("shell")) {
+                2.0
+            } else {
+                1.7
+            };
+            embed_width(attrs, cap_h * mult)
         }
         "icon" => embed_width(attrs, cap_h * icon_size(attrs) + cap_h * 0.3),
         "tickerbox" => embed_width(attrs, 160.0),
@@ -886,13 +896,13 @@ fn draw_status(
         // state (orange = working, cyan = shell).
         "working" => {
             let a = osc(time, 2.0, 0.15);
-            glow_halo(cr, cx, cy, cap_h * 1.1, "#ff5a14", a * 0.5);
-            draw_status_face(cr, cx, cy, cap_h * 1.18, "#ff5a14", a, scale);
+            glow_halo(cr, cx, cy, cap_h * 1.25, "#ff5a14", a * 0.5);
+            draw_status_face(cr, cx, cy, cap_h * 1.15, "#ff5a14", a, scale);
         }
         "shell" => {
             let a = osc(time, 2.8, 0.25);
-            glow_halo(cr, cx, cy, cap_h * 1.05, "#12f5ff", a * 0.4);
-            draw_status_face(cr, cx, cy, cap_h * 1.18, "#12f5ff", a, scale);
+            glow_halo(cr, cx, cy, cap_h * 1.2, "#12f5ff", a * 0.4);
+            draw_status_face(cr, cx, cy, cap_h * 1.15, "#12f5ff", a, scale);
         }
         // A bright `?` (drawn at the digit's scale, centered) over a visible
         // yellow bloom. The blink comes from the whole-tile `<pulse>`.
@@ -1148,19 +1158,29 @@ fn raster_svg_cached(
     })
 }
 
-/// Draw the bundled `claude-face` icon, tinted to `hex`, sized `size` and
-/// centered at `(cx, cy)`, composited at `alpha` (so it blinks/pulses with the
-/// status oscillation). Rasterized at device resolution and cached.
+/// Draw the bundled `claude-face` mascot, tinted to `hex`, so its **ink height**
+/// is `height` and it's centered at `(cx, cy)`, composited at `alpha` (so it
+/// blinks/pulses with the status oscillation). Rasterized at device resolution
+/// and cached.
+///
+/// The mascot is wider than tall (banner sprite, ~18×11), and `rasterize_argb32`
+/// fits it into a *square* buffer — so a square side of `height` would render the
+/// creature at only `11/18` of that height and read tiny next to the digit. We
+/// size the square box by the sprite's aspect so the painted ink height matches
+/// `height` (≈ the neighbouring digit's cap height).
 fn draw_status_face(
     cr: &gtk::cairo::Context,
     cx: f64,
     cy: f64,
-    size: f64,
+    height: f64,
     hex: &str,
     alpha: f64,
     scale: f64,
 ) {
-    let px = ((size * scale).round() as u32).max(1);
+    // claude-face viewBox aspect (width / height). Keep in sync with the SVG.
+    const MASCOT_ASPECT: f64 = 18.0 / 11.0;
+    let box_side = height * MASCOT_ASPECT;
+    let px = ((box_side * scale).round() as u32).max(1);
     let tint = render::parse_hex_color(hex).map(|c| (c.r, c.g, c.b));
     if let Some(buf) = raster_svg_cached("name:claude-face".to_string(), px, tint, || {
         svg::bundled("claude-face").map(|s| s.as_bytes().to_vec())
@@ -1171,8 +1191,8 @@ fn draw_status_face(
             px as usize,
             buf,
             scale,
-            cx - size / 2.0,
-            cy - size / 2.0,
+            cx - box_side / 2.0,
+            cy - box_side / 2.0,
             alpha,
         );
     }
