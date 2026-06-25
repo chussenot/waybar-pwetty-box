@@ -159,8 +159,14 @@ size/scale, and *unlimited* — no font can give you every app's logo.
 - `<icon src="/path/to.svg"/>` — any **external** SVG (e.g. a freedesktop app icon).
 - `color="#rrggbb"` (optional) — tint the SVG as a monochrome silhouette; omit it
   to keep the artwork's own colours (e.g. a multi-colour app logo).
+- `hero="1"` — draw the icon large in a left gutter, with the text indented past it.
+- `watermark="1"` — draw the icon large and dimmed in the *background*, biased
+  right; the text rides over it at full width, under a soft dark halo that keeps
+  light text legible over the artwork. Used by the plain-window layout of the
+  `claude` tile.
 
-Each icon is sized to the neighbouring digit/text and centered on the line.
+Each icon is sized to the neighbouring digit/text and centered on the line
+(except `hero`/`watermark`, which scale to the tile).
 
 **Bundled set:**
 

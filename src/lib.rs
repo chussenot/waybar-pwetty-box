@@ -660,11 +660,23 @@ fn draw_flow(
     // block height is known, so it centers on the whole content block.
     let mut left = pad;
     let mut hero = false; // a leading gutter element occupies line0[0]
+    let mut halo = false; // dark glow behind text (set when over a watermark icon)
     let mut hero_draw: Option<(&markup::Embed, f64)> = None;
+    let mut watermark_draw: Option<(&markup::Embed, f64)> = None;
     let mut gutter_draw: Option<(pango::Layout, f64, f64)> = None; // (layout, ink_top, ink_h)
     if let Some(FlowItem::Embed(idx)) = lines.first().and_then(|l| l.first()) {
         if let Some(e) = processed.embeds.get(*idx) {
-            if e.tag == "icon" && attr(&e.attrs, "hero").is_some() {
+            if e.tag == "icon" && attr(&e.attrs, "watermark").is_some() {
+                // A big, dimmed app icon behind the text (centred, not a gutter).
+                // Text uses the full width (normal pads); the icon shows through
+                // wherever the text doesn't cover it. A dark halo behind the text
+                // restores contrast over the artwork.
+                let wm_h = h * 0.92;
+                left = pad;
+                hero = true; // skip the leading embed in the per-line pass
+                halo = true;
+                watermark_draw = Some((e, wm_h));
+            } else if e.tag == "icon" && attr(&e.attrs, "hero").is_some() {
                 let hero_h = h * 0.7;
                 left = pad + hero_h + config.font_size as f64 * 0.5;
                 hero = true;
@@ -715,6 +727,13 @@ fn draw_flow(
     let top_pad = config.font_size as f64 * 0.5;
     let mut y = top_pad;
 
+    // Draw the dimmed background watermark first, so text (and its halo) land on
+    // top. Centred vertically; horizontally biased toward the right so the
+    // left-aligned text overlays its left half and the right half stays clear.
+    if let Some((e, wm_h)) = watermark_draw {
+        let cx = (w * 0.60).min(w - wm_h * 0.5 - pad * 0.5);
+        draw_icon_alpha(cr, &e.attrs, cx, h / 2.0, wm_h, scale, 0.22);
+    }
     // Draw the deferred hero icon, centered on the content block (clamped to stay
     // within the tile) so it reads as part of the now top-aligned content.
     if let Some((e, hero_h)) = hero_draw {
@@ -735,6 +754,9 @@ fn draw_flow(
 
         // A wrapped body line: paint the multi-line block at the gutter, top-down.
         if let Some(layout) = &wraps[li] {
+            if halo {
+                text::halo(cr, layout, left, ly, config.font_size as f64 * 0.12);
+            }
             text::paint(cr, layout, left, ly, style);
             continue;
         }
@@ -792,6 +814,9 @@ fn draw_flow(
                 FlowItem::Text(_) => {
                     if let Some(run) = &laid[ii] {
                         let y = center_y - run.ink_top - run.ink_h / 2.0;
+                        if halo {
+                            text::halo(cr, &run.layout, x, y, config.font_size as f64 * 0.12);
+                        }
                         text::paint(cr, &run.layout, x, y, style);
                         x += run.width;
                     }
@@ -1074,6 +1099,21 @@ fn draw_icon(
     cap_h: f64,
     scale: f64,
 ) {
+    draw_icon_alpha(cr, attrs, cx, cy, cap_h, scale, 1.0);
+}
+
+/// As [`draw_icon`], but composited at `alpha` — used to dim an icon when it's
+/// drawn as a faint background watermark behind text.
+#[allow(clippy::too_many_arguments)]
+fn draw_icon_alpha(
+    cr: &gtk::cairo::Context,
+    attrs: &[(String, String)],
+    cx: f64,
+    cy: f64,
+    cap_h: f64,
+    scale: f64,
+    alpha: f64,
+) {
     if cap_h < 1.0 {
         return;
     }
@@ -1103,7 +1143,7 @@ fn draw_icon(
             scale,
             cx - cap_h / 2.0,
             cy - cap_h / 2.0,
-            1.0,
+            alpha,
         );
     }
 }

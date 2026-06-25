@@ -196,3 +196,24 @@ pub fn paint(cr: &cairo::Context, layout: &pango::Layout, x: f64, y: f64, style:
     cr.move_to(x, y);
     pangocairo::functions::show_layout(cr, layout);
 }
+
+/// Paint a soft dark glow/outline behind `layout` at logical `(x, y)`, for
+/// contrast when text sits over a busy or light background (e.g. a watermark
+/// app icon). Call this *before* [`paint`]: it lays the glyph outlines down as a
+/// feathered near-black halo (two widening strokes plus a fill), then the caller
+/// paints the real coloured text on top. `w` is the halo thickness in logical px.
+pub fn halo(cr: &cairo::Context, layout: &pango::Layout, x: f64, y: f64, w: f64) {
+    cr.move_to(x, y);
+    pangocairo::functions::layout_path(cr, layout);
+    cr.set_line_join(cairo::LineJoin::Round);
+    // Widest + faintest first, then tighter + stronger, then fill the glyph body
+    // — a cheap feathered shadow that hugs each glyph.
+    cr.set_source_rgba(0.0, 0.0, 0.02, 0.22);
+    cr.set_line_width(w * 2.4);
+    let _ = cr.stroke_preserve();
+    cr.set_source_rgba(0.0, 0.0, 0.02, 0.5);
+    cr.set_line_width(w);
+    let _ = cr.stroke_preserve();
+    cr.set_source_rgba(0.0, 0.0, 0.02, 0.7);
+    let _ = cr.fill();
+}
