@@ -593,14 +593,11 @@ fn cap_at(laid: &[Option<Run>], before: usize, line_h: f64) -> f64 {
         .flatten()
         .map(|r| r.ink_h)
         .find(|&hh| hh >= 1.0)
-        .or_else(|| {
-            let m = laid
-                .iter()
-                .flatten()
-                .map(|r| r.ink_h)
-                .fold(0.0_f64, f64::max);
-            (m >= 1.0).then_some(m)
-        })
+        // No *preceding* sized run — a leading status/icon, e.g. every per-session
+        // row in the multi-session tile (`<status/> folder …`). Size to a stable,
+        // glyph-independent cap height so all rows' mascots match. (Previously this
+        // took the max ink over the whole row, which an `↑N` unpushed badge — a
+        // full-height arrow — inflated, making badged rows' mascots larger.)
         .unwrap_or(line_h * 0.62)
 }
 
