@@ -660,7 +660,9 @@ fn draw_flow(
     // block height is known, so it centers on the whole content block.
     let mut left = pad;
     let mut hero = false; // a leading gutter element occupies line0[0]
-    let mut halo = false; // dark glow behind text (set when over a watermark icon)
+    // Dark glow behind every text run, for contrast against a translucent bar (or
+    // a watermark icon). Always on so all tiles' numbers and titles read crisply.
+    let halo = true;
     let mut hero_draw: Option<(&markup::Embed, f64)> = None;
     let mut watermark_draw: Option<(&markup::Embed, f64)> = None;
     let mut gutter_draw: Option<(pango::Layout, f64, f64)> = None; // (layout, ink_top, ink_h)
@@ -674,7 +676,6 @@ fn draw_flow(
                 let wm_h = h * 0.92;
                 left = pad;
                 hero = true; // skip the leading embed in the per-line pass
-                halo = true;
                 watermark_draw = Some((e, wm_h));
             } else if e.tag == "icon" && attr(&e.attrs, "hero").is_some() {
                 let hero_h = h * 0.7;
@@ -743,7 +744,11 @@ fn draw_flow(
     // Big text gutter, ink-centered on the content block at the left pad.
     if let Some((layout, ink_top, ink_h)) = &gutter_draw {
         let cy = top_pad + total / 2.0;
-        text::paint(cr, layout, pad, cy - ink_top - ink_h / 2.0, style);
+        let gy = cy - ink_top - ink_h / 2.0;
+        if halo {
+            text::halo(cr, layout, pad, gy, config.font_size as f64 * 0.12);
+        }
+        text::paint(cr, layout, pad, gy, style);
     }
 
     for (li, items) in lines.iter().enumerate() {
