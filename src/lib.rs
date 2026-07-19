@@ -1317,13 +1317,64 @@ fn draw_idle_cells(
     let _ = cr.fill();
 }
 
+/// Idle age in minutes, parsed from a short `ago` label like `45s` / `12m` / `2h`.
+fn idle_minutes(ago: &str) -> f64 {
+    let s = ago.trim();
+    let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let n: f64 = s[..split].parse().unwrap_or(0.0);
+    match s[split..].trim() {
+        "h" | "hr" | "hrs" => n * 60.0,
+        "d" => n * 24.0 * 60.0,
+        "s" | "sec" => n / 60.0,
+        _ => n, // "m"/minutes, and the common bare-number case
+    }
+}
+
+/// Idle time-label colour by age — a piecewise ramp that recedes as a session
+/// sits longer untouched:
+///   <5 min  full white
+///   1 h     full red        (white→red across 5..60 min)
+///   3 h     full red        (holds red through 1..3 h)
+///   6 h     bright purple   (red→bright purple across 3..6 h)
+///   9 h+    dark purple     (bright→dark purple across 6..9 h, then holds)
+fn idle_age_color(ago: &str) -> (f64, f64, f64) {
+    // (minutes, r, g, b) keyframes, ascending; interpolated linearly, clamped
+    // at both ends.
+    const KF: [(f64, f64, f64, f64); 5] = [
+        (5.0, 1.0, 1.0, 1.0),     // white
+        (60.0, 1.0, 0.0, 0.0),    // red
+        (180.0, 1.0, 0.0, 0.0),   // red (held)
+        (360.0, 0.78, 0.30, 1.0), // bright purple
+        (540.0, 0.30, 0.08, 0.45), // dark purple
+    ];
+    let m = idle_minutes(ago);
+    let first = KF[0];
+    let last = KF[KF.len() - 1];
+    if m <= first.0 {
+        return (first.1, first.2, first.3);
+    }
+    if m >= last.0 {
+        return (last.1, last.2, last.3);
+    }
+    for w in KF.windows(2) {
+        let (m0, r0, g0, b0) = w[0];
+        let (m1, r1, g1, b1) = w[1];
+        if m <= m1 {
+            let t = (m - m0) / (m1 - m0);
+            return (r0 + (r1 - r0) * t, g0 + (g1 - g0) * t, b0 + (b1 - b0) * t);
+        }
+    }
+    (last.1, last.2, last.3)
+}
+
 /// Draw the idle indicator as a **badge**: the two decay cells on the left, with
 /// the "time since active" (`ago`, e.g. `12m`) as a plain, readable, *horizontal*
-/// label to their right — vertically centred on the line, in a mild Knight-Rider
-/// (K-2000) red (a static left→centre→right red gradient; no animation, so idle
-/// tiles stay cheap). The whole badge lives in the status embed's reserved width,
-/// so the time never spills into the folder/next tile. (An earlier version arced
-/// the time over the bars, but that's illegible in a short bar — readability wins.)
+/// label to their right — vertically centred on the line. The label is a flat
+/// colour that fades with idle age (see [`idle_age_color`]): white when fresh,
+/// to red by 1 h, then on through bright purple (~6 h) to dark purple (9 h+) —
+/// mirroring the cells' fade-to-black, but in colour. No gradient/animation, so
+/// idle tiles stay cheap. The whole badge lives in the status embed's reserved
+/// width, so the time never spills into the folder/next tile.
 fn draw_idle_badge(
     cr: &gtk::cairo::Context,
     cx: f64,
@@ -1351,15 +1402,12 @@ fn draw_idle_badge(
         gtk::cairo::FontWeight::Bold,
     );
     cr.set_font_size(fs);
-    let ext = cr.text_extents(ago).map(|e| e.width()).unwrap_or(fs * 1.5);
     let tx = bar_cx + cap_h * 0.85; // just right of the cells
     let ty = cy + fs * 0.36; // baseline -> roughly vertically centred ink
-                             // Mild K-2000 red: deep at the ends, brighter through the middle.
-    let grad = gtk::cairo::LinearGradient::new(tx, 0.0, tx + ext, 0.0);
-    grad.add_color_stop_rgb(0.0, 0.62, 0.14, 0.14);
-    grad.add_color_stop_rgb(0.5, 1.0, 0.32, 0.30);
-    grad.add_color_stop_rgb(1.0, 0.62, 0.14, 0.14);
-    let _ = cr.set_source(&grad);
+                             // Flat colour by age (no gradient): white→red→purple
+                             // as the session sits longer untouched.
+    let (r, g, b) = idle_age_color(ago);
+    cr.set_source_rgb(r, g, b);
     cr.move_to(tx, ty);
     let _ = cr.show_text(ago);
     cr.restore().ok();
@@ -1587,5 +1635,32 @@ mod tests {
         assert_eq!(IDLE_LEVELS.len(), 7);
         assert_eq!(IDLE_LEVELS[0], "#ffffff");
         assert_eq!(IDLE_LEVELS[6], "#3a3a3a");
+    }
+
+    #[test]
+    fn idle_age_color_keyframes() {
+        let white = (1.0, 1.0, 1.0);
+        let red = (1.0, 0.0, 0.0);
+        let bright_purple = (0.78, 0.30, 1.0);
+        let dark_purple = (0.30, 0.08, 0.45);
+
+        // Full white below 5 min, regardless of unit.
+        assert_eq!(idle_age_color("0s"), white);
+        assert_eq!(idle_age_color("4m"), white);
+        assert_eq!(idle_age_color("5m"), white);
+        // Red from 1 h, held through 3 h.
+        assert_eq!(idle_age_color("1h"), red);
+        assert_eq!(idle_age_color("2h"), red);
+        assert_eq!(idle_age_color("3h"), red);
+        // Bright purple at 6 h, dark purple at 9 h and beyond.
+        assert_eq!(idle_age_color("6h"), bright_purple);
+        assert_eq!(idle_age_color("9h"), dark_purple);
+        assert_eq!(idle_age_color("12h"), dark_purple);
+
+        // Halfway between 3 h and 6 h: midway red→bright purple.
+        let (r, g, b) = idle_age_color("270m"); // 4.5 h
+        assert!((r - 0.89).abs() < 1e-6 && (g - 0.15).abs() < 1e-6 && (b - 0.5).abs() < 1e-6);
+        // Within the 5..60 min window the red ramp climbs (green/blue drop).
+        assert!(idle_age_color("12m").1 > idle_age_color("40m").1);
     }
 }
