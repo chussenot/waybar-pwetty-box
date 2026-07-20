@@ -441,13 +441,13 @@ pub fn draw_content(
     // `<bg preset="…">` paints a shader layer (masked to the focus bubble, mild
     // alpha) as the bottom-most layer — behind the accent card and the content.
     if let (Some(bg), Some(fx)) = (&processed.bg, fx.as_deref_mut()) {
-        draw_bg(cr, w, h, bg, fx);
+        draw_bg(cr, w, h, bg, config.corner_radius, fx);
     }
 
     // `<active/>` marks the focused desktop — a steady accent "card" behind the
     // tile (drawn before the pulse group so it doesn't oscillate).
     if processed.active {
-        draw_active_panel(cr, w, h);
+        draw_active_panel(cr, w, h, config.corner_radius);
     }
 
     // `<pulse>` makes the whole tile's opacity oscillate (an attention signal):
@@ -981,17 +981,18 @@ fn draw_ring(cr: &gtk::cairo::Context, cx: f64, cy: f64, r: f64, hex: &str) {
 /// the mask a `<bg>` shader layer is clipped to — one definition so they always
 /// agree. The rect is centred (equal insets), which lets the shader compute its
 /// mask from `gl_FragCoord` regardless of GL's y-origin.
-fn focus_bubble(w: f64, h: f64) -> (f64, f64, f64, f64, f64) {
+fn focus_bubble(w: f64, h: f64, corner_radius: Option<f64>) -> (f64, f64, f64, f64, f64) {
     let inset = 2.0;
     let pw = (w - 2.0 * inset).max(0.0);
     let ph = (h - 2.0 * inset).max(0.0);
-    (inset, inset, pw, ph, ph * 0.20)
+    let r = corner_radius.map_or(ph * 0.20, |r| r.max(0.0));
+    (inset, inset, pw, ph, r)
 }
 
 /// Draw the active-desktop accent: a rounded "card" — a faint accent fill plus a
 /// brighter accent border — on the focus bubble, behind the content.
-fn draw_active_panel(cr: &gtk::cairo::Context, w: f64, h: f64) {
-    let (x, y, pw, ph, r) = focus_bubble(w, h);
+fn draw_active_panel(cr: &gtk::cairo::Context, w: f64, h: f64, corner_radius: Option<f64>) {
+    let (x, y, pw, ph, r) = focus_bubble(w, h, corner_radius);
     rounded_rect(cr, x, y, pw, ph, r);
     set_hex(cr, "#89b4fa", 0.12);
     let _ = cr.fill();
@@ -1010,7 +1011,14 @@ const BG_FADE: f32 = 20.0;
 /// Render a `<bg preset="…">` shader layer, masked to the focus bubble at moderate
 /// alpha, and composite it behind the tile content. Reserved attrs `alpha`/`fade`
 /// tune the mask; any other `name="float"` attr becomes a shader uniform.
-fn draw_bg(cr: &gtk::cairo::Context, w: f64, h: f64, bg: &markup::BgSpec, fx: &mut EffectCtx) {
+fn draw_bg(
+    cr: &gtk::cairo::Context,
+    w: f64,
+    h: f64,
+    bg: &markup::BgSpec,
+    corner_radius: Option<f64>,
+    fx: &mut EffectCtx,
+) {
     let Some(name) = bg.preset() else { return };
     let Some(src) = shader::preset(name) else {
         eprintln!("pwetty-box: unknown bg preset '{name}'");
@@ -1022,7 +1030,7 @@ fn draw_bg(cr: &gtk::cairo::Context, w: f64, h: f64, bg: &markup::BgSpec, fx: &m
         return;
     }
     let s = fx.scale as f32;
-    let (bx, by, bw, bh, r) = focus_bubble(w, h);
+    let (bx, by, bw, bh, r) = focus_bubble(w, h, corner_radius);
     // Defaults first; per-tile attrs pushed after override by name (last wins in
     // the GL uniform set).
     let mut uniforms: Vec<(String, f32)> = vec![
