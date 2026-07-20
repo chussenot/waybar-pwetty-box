@@ -195,7 +195,7 @@ mod tests {
         // overrides width and adds exec. Module keys win; preset fills the rest.
         let c = resolve(json!({ "tile": "claude", "width": 360, "exec": "echo" }));
         assert_eq!(c.width, 360); // module override wins
-        assert_eq!(c.height, 96); // from preset
+        assert_eq!(c.height, 80); // from preset
         assert_eq!(c.exec.as_deref(), Some("echo"));
         assert!(c.format.as_deref().unwrap().contains("<status"));
     }

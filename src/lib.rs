@@ -666,11 +666,10 @@ fn draw_flow(
     if let Some(FlowItem::Embed(idx)) = lines.first().and_then(|l| l.first()) {
         if let Some(e) = processed.embeds.get(*idx) {
             if e.tag == "icon" && attr(&e.attrs, "watermark").is_some() {
-                // A big, dimmed app icon behind the text (centred, not a gutter).
-                // Text uses the full width (normal pads); the icon shows through
-                // wherever the text doesn't cover it. A dark halo behind the text
-                // restores contrast over the artwork.
-                let wm_h = h * 0.92;
+                // A dimmed app icon on the tile's right side. Text keeps the
+                // full width (normal pads); the halo restores contrast where a
+                // long line reaches the icon.
+                let wm_h = h * 0.55;
                 left = pad;
                 hero = true; // skip the leading embed in the per-line pass
                 watermark_draw = Some((e, wm_h));
@@ -698,6 +697,7 @@ fn draw_flow(
     // as tall as it needs; every other line is one `line_h`. Pre-compute (and
     // keep the wrapped layouts) so the whole block can be vertically centered.
     let avail = (w - left - pad).max(20.0);
+    let top_pad = config.font_size as f64 * 0.5;
     let mut wraps: Vec<Option<pango::Layout>> = Vec::with_capacity(lines.len());
     let mut heights: Vec<f64> = Vec::with_capacity(lines.len());
     for items in &lines {
@@ -708,7 +708,16 @@ fn draw_flow(
         match wrap {
             Some(e) => {
                 let layout = text::layout_wrapped(cr, &e.inner, avail, style);
-                let hgt = (layout.pixel_size().1 as f64).max(line_h);
+                // Ellipsize into the space left below the lines above, instead
+                // of spilling past the tile.
+                let used: f64 = heights.iter().sum();
+                let max_h = (h - top_pad - used - 2.0).max(line_h);
+                let mut hgt = (layout.pixel_size().1 as f64).max(line_h);
+                if hgt > max_h {
+                    layout.set_height((max_h * pango::SCALE as f64) as i32);
+                    layout.set_ellipsize(pango::EllipsizeMode::End);
+                    hgt = (layout.pixel_size().1 as f64).max(line_h);
+                }
                 wraps.push(Some(layout));
                 heights.push(hgt);
             }
@@ -721,16 +730,14 @@ fn draw_flow(
     let total: f64 = heights.iter().sum();
     // Top-align the block (a small, tile-independent top pad) so every tile's
     // header sits on the same line regardless of how many wrapped lines follow.
-    // (Tall content that exceeds the tile just starts at the pad and clips.)
-    let top_pad = config.font_size as f64 * 0.5;
     let mut y = top_pad;
 
     // Draw the dimmed background watermark first, so text (and its halo) land on
-    // top. Centred vertically; horizontally biased toward the right so the
-    // left-aligned text overlays its left half and the right half stays clear.
+    // top. Vertically centred, anchored to the right pad so it reads as a badge
+    // and stays clear of the left-aligned text.
     if let Some((e, wm_h)) = watermark_draw {
-        let cx = (w * 0.60).min(w - wm_h * 0.5 - pad * 0.5);
-        draw_icon_alpha(cr, &e.attrs, cx, h / 2.0, wm_h, scale, 0.22);
+        let cx = w - wm_h * 0.5 - pad;
+        draw_icon_alpha(cr, &e.attrs, cx, h / 2.0, wm_h, scale, 0.30);
     }
     // Draw the deferred hero icon, centered on the content block (clamped to stay
     // within the tile) so it reads as part of the now top-aligned content.
