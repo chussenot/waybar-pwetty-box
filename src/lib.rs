@@ -27,6 +27,7 @@ pub mod tiles;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -40,7 +41,10 @@ use render::Renderer;
 /// Live rendering state, present once the offscreen GL context is up.
 struct Engine {
     gl: OffscreenGl,
-    renderer: Renderer,
+    /// femtovg's `OpenGl::drop` issues GL calls, so the canvas must only ever
+    /// be dropped with our context current — see `Engine::drop`. (Field drop
+    /// order alone can't guarantee that: `OffscreenGl::drop` unbinds first.)
+    renderer: ManuallyDrop<Renderer>,
     start: Instant,
     /// Optional tile-level background shader (path + lazily compiled + mtime).
     shader_path: Option<String>,
@@ -49,6 +53,20 @@ struct Engine {
     /// Compiled shaders for span-level effects (e.g. `<glow>`), keyed by source.
     span_shaders: shader::ShaderCache,
     frame: i32,
+}
+
+/// Teardown happens with no GL context current (GTK disposes the widget on
+/// output removal / config reload, dropping the draw closure's `Rc<Shared>`),
+/// and femtovg's `OpenGl::drop` then aborts in epoxy ("Couldn't find current
+/// GLX or EGL context"). Make our own offscreen context current for the drop;
+/// if that fails, leak the canvas — its GL resources die with the context.
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if self.gl.make_current().is_ok() {
+            // SAFETY: dropped exactly once, here; `renderer` is not used again.
+            unsafe { ManuallyDrop::drop(&mut self.renderer) };
+        }
+    }
 }
 
 impl Engine {
@@ -115,7 +133,7 @@ impl Module for PwettyBox {
             Ok(gl) => match Renderer::new(&config, content.is_some()) {
                 Ok(renderer) => Some(Engine {
                     gl,
-                    renderer,
+                    renderer: ManuallyDrop::new(renderer),
                     start: Instant::now(),
                     shader_path: config.background_shader.clone(),
                     shader: None,
@@ -1554,6 +1572,35 @@ waybar_module!(PwettyBox);
 mod tests {
     use super::*;
     const P: char = markup::EMBED_PLACEHOLDER;
+
+    /// Regression: dropping the engine with no GL context current must not
+    /// abort (epoxy asserts inside femtovg's `OpenGl::drop` otherwise). This is
+    /// exactly what happens live when an output is removed or the config
+    /// reloads: GTK disposes the widget and the draw closure drops the last
+    /// `Rc<Shared>` long after any context was current.
+    #[test]
+    fn engine_drop_without_current_context() {
+        let Ok(gl) = OffscreenGl::new() else {
+            eprintln!("skipping: no surfaceless EGL in this environment");
+            return;
+        };
+        let config = config::resolve(serde_json::json!({}));
+        let renderer = Renderer::new(&config, true).expect("renderer");
+        let engine = Engine {
+            gl,
+            renderer: ManuallyDrop::new(renderer),
+            start: Instant::now(),
+            shader_path: None,
+            shader: None,
+            shader_mtime: None,
+            span_shaders: shader::ShaderCache::new(),
+            frame: 0,
+        };
+        // A second context's Drop unbinds the thread's current context — the
+        // engine teardown that follows must cope with "nothing current".
+        drop(OffscreenGl::new().expect("second EGL context"));
+        drop(engine); // aborts the whole test process if the fix regresses
+    }
 
     #[test]
     fn flow_layout_single_line_with_embed() {
