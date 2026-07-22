@@ -27,6 +27,7 @@ pub mod tiles;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -40,7 +41,10 @@ use render::Renderer;
 /// Live rendering state, present once the offscreen GL context is up.
 struct Engine {
     gl: OffscreenGl,
-    renderer: Renderer,
+    /// femtovg's `OpenGl::drop` issues GL calls, so the canvas must only ever
+    /// be dropped with our context current — see `Engine::drop`. (Field drop
+    /// order alone can't guarantee that: `OffscreenGl::drop` unbinds first.)
+    renderer: ManuallyDrop<Renderer>,
     start: Instant,
     /// Optional tile-level background shader (path + lazily compiled + mtime).
     shader_path: Option<String>,
@@ -49,6 +53,20 @@ struct Engine {
     /// Compiled shaders for span-level effects (e.g. `<glow>`), keyed by source.
     span_shaders: shader::ShaderCache,
     frame: i32,
+}
+
+/// Teardown happens with no GL context current (GTK disposes the widget on
+/// output removal / config reload, dropping the draw closure's `Rc<Shared>`),
+/// and femtovg's `OpenGl::drop` then aborts in epoxy ("Couldn't find current
+/// GLX or EGL context"). Make our own offscreen context current for the drop;
+/// if that fails, leak the canvas — its GL resources die with the context.
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if self.gl.make_current().is_ok() {
+            // SAFETY: dropped exactly once, here; `renderer` is not used again.
+            unsafe { ManuallyDrop::drop(&mut self.renderer) };
+        }
+    }
 }
 
 impl Engine {
@@ -84,12 +102,28 @@ impl Engine {
 struct Shared {
     engine: RefCell<Option<Engine>>,
     config: Config,
+    /// Kept only so `PwettyBox`'s `Drop` can tear it down; the live draw/tick
+    /// callbacks hold their own clones.
+    content: Option<content::ContentStore>,
 }
 
 pub struct PwettyBox {
     // Keep shared state alive for the module's lifetime; the GTK widget tree
     // (owned by Waybar) holds the closures that reference it.
     _shared: Rc<Shared>,
+}
+
+/// Waybar recreates every CFFI module on reload (SIGUSR2) — not just on
+/// output/config changes — so `PwettyBox` is dropped and rebuilt on every
+/// reload. Stop this instance's background poll/stream loop and dirty-poll
+/// timer instead of leaking a new producer chain + thread + timer per reload;
+/// see `reload-conserves-producer-chains`.
+impl Drop for PwettyBox {
+    fn drop(&mut self) {
+        if let Some(store) = &self._shared.content {
+            store.shutdown();
+        }
+    }
 }
 
 /// Hover highlight: fade duration (ms), ring colour (light grey with a slight
@@ -200,7 +234,7 @@ impl Module for PwettyBox {
             Ok(gl) => match Renderer::new(&config, content.is_some()) {
                 Ok(renderer) => Some(Engine {
                     gl,
-                    renderer,
+                    renderer: ManuallyDrop::new(renderer),
                     start: Instant::now(),
                     shader_path: config.background_shader.clone(),
                     shader: None,
@@ -222,6 +256,7 @@ impl Module for PwettyBox {
         let shared = Rc::new(Shared {
             engine: RefCell::new(engine),
             config,
+            content: content.clone(),
         });
 
         {
@@ -363,9 +398,14 @@ impl Module for PwettyBox {
 
         // Redraw when a content source publishes new content (e.g. a command
         // refresh). Cheap poll of the dirty flag — content tiles can set fps: 0.
+        // Stops on shutdown (module teardown) instead of holding a strong
+        // DrawingArea + store ref forever — see `reload-conserves-producer-chains`.
         if let Some(store) = content {
             let area = area.clone();
             gtk::glib::timeout_add_local(Duration::from_millis(150), move || {
+                if store.is_shutdown() {
+                    return gtk::glib::ControlFlow::Break;
+                }
                 if store.take_dirty() {
                     area.queue_draw();
                 }
@@ -1218,6 +1258,26 @@ fn draw_icon(
     draw_icon_alpha(cr, attrs, cx, cy, cap_h, scale, 1.0);
 }
 
+/// Max size we'll read for an `<icon src>` file (see
+/// `icon-src-read-bounded-nonblocking`): comfortably above any real SVG, small
+/// enough to bound a memory spike from a bogus path.
+const ICON_SRC_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Read `<icon src="path">`'s bytes, guarded by `fs::metadata` *before* the
+/// read: `path` is data-controlled (it flows from tile content), and this
+/// runs on the GTK main thread inside the draw callback, so an unguarded
+/// `fs::read` on a FIFO would wedge the whole bar forever, and an unguarded
+/// huge file would spike memory every frame. Rejects anything that isn't a
+/// regular file, or is over [`ICON_SRC_MAX_BYTES`] — same `None` (load
+/// failure) path as a missing file.
+fn read_icon_src(path: &str) -> Option<Vec<u8>> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > ICON_SRC_MAX_BYTES {
+        return None;
+    }
+    std::fs::read(path).ok()
+}
+
 /// As [`draw_icon`], but composited at `alpha` — used to dim an icon when it's
 /// drawn as a faint background watermark behind text.
 #[allow(clippy::too_many_arguments)]
@@ -1247,7 +1307,7 @@ fn draw_icon_alpha(
 
     let buf = raster_svg_cached(key, px, tint, || match (name, src) {
         (Some(n), _) => svg::bundled(n).map(|s| s.as_bytes().to_vec()),
-        (_, Some(s)) => std::fs::read(s).ok(),
+        (_, Some(s)) => read_icon_src(s),
         _ => None,
     });
     if let Some(buf) = buf {
@@ -1669,6 +1729,35 @@ mod tests {
     use super::*;
     const P: char = markup::EMBED_PLACEHOLDER;
 
+    /// Regression: dropping the engine with no GL context current must not
+    /// abort (epoxy asserts inside femtovg's `OpenGl::drop` otherwise). This is
+    /// exactly what happens live when an output is removed or the config
+    /// reloads: GTK disposes the widget and the draw closure drops the last
+    /// `Rc<Shared>` long after any context was current.
+    #[test]
+    fn engine_drop_without_current_context() {
+        let Ok(gl) = OffscreenGl::new() else {
+            eprintln!("skipping: no surfaceless EGL in this environment");
+            return;
+        };
+        let config = config::resolve(serde_json::json!({}));
+        let renderer = Renderer::new(&config, true).expect("renderer");
+        let engine = Engine {
+            gl,
+            renderer: ManuallyDrop::new(renderer),
+            start: Instant::now(),
+            shader_path: None,
+            shader: None,
+            shader_mtime: None,
+            span_shaders: shader::ShaderCache::new(),
+            frame: 0,
+        };
+        // A second context's Drop unbinds the thread's current context — the
+        // engine teardown that follows must cope with "nothing current".
+        drop(OffscreenGl::new().expect("second EGL context"));
+        drop(engine); // aborts the whole test process if the fix regresses
+    }
+
     #[test]
     fn hover_fades_between_states() {
         let wait = std::time::Duration::from_millis(HOVER_FADE_MS as u64 + 50);
@@ -1791,5 +1880,36 @@ mod tests {
         assert!((r - 0.89).abs() < 1e-6 && (g - 0.15).abs() < 1e-6 && (b - 0.5).abs() < 1e-6);
         // Within the 5..60 min window the red ramp climbs (green/blue drop).
         assert!(idle_age_color("12m").1 > idle_age_color("40m").1);
+    }
+
+    /// `<icon src>` reads a data-controlled path on the GTK main thread; the
+    /// `fs::metadata` guard must reject anything that isn't a bounded regular
+    /// file *before* `fs::read` runs, so a FIFO can't wedge the bar and a huge
+    /// file can't spike memory. A directory covers "not a regular file"
+    /// (stands in for a FIFO/socket/device, which all fail `is_file()` the
+    /// same way) without needing to open a real FIFO in a unit test.
+    #[test]
+    fn icon_src_rejects_fifo_and_huge() {
+        let dir = std::env::temp_dir().join(format!("pwetty-box-icon-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).expect("create test dir");
+
+        // Non-regular file (directory stands in for a FIFO/socket/device).
+        assert!(read_icon_src(dir.to_str().unwrap()).is_none());
+
+        // Regular file over the cap.
+        let big = dir.join("big.svg");
+        std::fs::write(&big, vec![b'a'; ICON_SRC_MAX_BYTES as usize + 1]).expect("write big file");
+        assert!(read_icon_src(big.to_str().unwrap()).is_none());
+
+        // Regular file within the cap still reads.
+        let small = dir.join("small.svg");
+        std::fs::write(&small, b"<svg/>").expect("write small file");
+        assert_eq!(
+            read_icon_src(small.to_str().unwrap()),
+            Some(b"<svg/>".to_vec())
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
