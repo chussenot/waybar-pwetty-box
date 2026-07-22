@@ -263,6 +263,11 @@ impl Module for PwettyBox {
             let shared = shared.clone();
             let content_draw = content.clone();
             let hover = hover.clone();
+            // Per-widget cache of the last `markup::process()` result, so a tile
+            // that's animating (time-only change — blink/glow/pulse) doesn't
+            // re-parse + re-shape identical text every single frame.
+            let processed_cache: Rc<RefCell<Option<(String, markup::Processed)>>> =
+                Rc::new(RefCell::new(None));
             area.connect_draw(move |area, cr| {
                 let scale = area.scale_factor().max(1);
                 // Shader uniforms resolved from the current data (empty if none).
@@ -335,7 +340,16 @@ impl Module for PwettyBox {
                                 frame,
                                 scale: scale as f64,
                             };
-                            draw_content(cr, markup, wl, hl, &shared.config, Some(&mut fx));
+                            let mut cache = processed_cache.borrow_mut();
+                            let stale = cache.as_ref().is_none_or(|(k, _)| k != markup);
+                            if stale {
+                                *cache = Some((
+                                    markup.clone(),
+                                    markup::process(markup, EFFECT_TAGS, EMBED_TAGS),
+                                ));
+                            }
+                            let processed = &cache.as_ref().expect("just set above").1;
+                            draw_processed(cr, processed, wl, hl, &shared.config, Some(&mut fx));
                         }
                     }
                 }
@@ -569,11 +583,29 @@ pub fn draw_content(
     w: f64,
     h: f64,
     config: &Config,
+    fx: Option<&mut EffectCtx>,
+) {
+    let processed = markup::process(content_markup, EFFECT_TAGS, EMBED_TAGS);
+    draw_processed(cr, &processed, w, h, config, fx);
+}
+
+/// The rest of [`draw_content`], operating on an already-[`markup::process`]ed
+/// value — split out so the live tick-driven redraw path (`connect_draw`) can
+/// reuse the previous frame's `Processed` when the markup string is unchanged
+/// (the common case for a tile animating a blink/glow/pulse: only `time`
+/// moves, not the text), skipping a re-parse + re-shape every frame. See
+/// `perf-cairo-pixman-dominates-cpu` — a live profile found XML parsing +
+/// Pango/HarfBuzz shaping recurring needlessly on unchanged content.
+fn draw_processed(
+    cr: &gtk::cairo::Context,
+    processed: &markup::Processed,
+    w: f64,
+    h: f64,
+    config: &Config,
     mut fx: Option<&mut EffectCtx>,
 ) {
     let time = fx.as_ref().map(|f| f.time).unwrap_or(0.0);
     let scale = fx.as_ref().map(|f| f.scale).unwrap_or(1.0);
-    let processed = markup::process(content_markup, EFFECT_TAGS, EMBED_TAGS);
 
     let style = text::TextStyle {
         font_family: font_family(config),
@@ -603,7 +635,7 @@ pub fn draw_content(
     // Tiles with inline embeds compose explicitly (line-by-line, left-to-right);
     // tiles without use the richer wrapping + effect path.
     if !processed.embeds.is_empty() {
-        draw_flow(cr, &processed, w, h, config, &style, time, scale);
+        draw_flow(cr, processed, w, h, config, &style, time, scale);
     } else {
         let (layout, ox, oy) = text::layout(cr, &processed.markup, w, h, &style);
 
