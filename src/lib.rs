@@ -542,9 +542,14 @@ const EFFECT_TAGS: &[&str] = &["box", "glow"];
 const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon", "sep", "wrap", "gutter"];
 
 /// Default redraw rate for auto-animated tiles (blink/pulse/ticker) when the
-/// config doesn't pin `fps`. Below the monitor's 60Hz but smooth (the per-frame
-/// cost is now Cairo-only for content tiles). Override per-module with `fps`.
-const DEFAULT_ANIM_FPS: u32 = 30;
+/// config doesn't pin `fps`. "Cairo-only" isn't free: a live profile of a bar
+/// full of these tiles showed cairo/pixman software compositing as the single
+/// largest CPU consumer, so redraw *frequency* matters. All the slow
+/// oscillations this drives (status blink, idle glow, prompt pulse — periods
+/// 1.1-3.4s) stay visually smooth well under 30fps; only the ticker's 70px/s
+/// scroll wants more headroom, hence 20 rather than lower. Override per-module
+/// with `fps`.
+const DEFAULT_ANIM_FPS: u32 = 20;
 
 /// GPU resources + timing a span effect needs (currently `<glow>`). Without it
 /// (e.g. a CPU-only caller), GPU span effects are skipped; `<box>` still draws.
