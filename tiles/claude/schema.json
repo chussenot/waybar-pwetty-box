@@ -52,7 +52,7 @@
           "state": {
             "type": "string",
             "enum": ["working", "prompt", "idle", "shell", "empty"],
-            "description": "REAL (sessions.state). Drives this session's indicator: working=Claude mascot deep-orange, prompt=blinking '?' (and the WHOLE tile pulses if ANY session is prompt), idle=fade bar (see idle_level) + idle_ago, shell=mascot electric-cyan, empty=dim hollow ring (desktop has no session or window — the producer's absent-desktop placeholder)."
+            "description": "REAL (sessions.state). Drives this session's indicator: working=Claude mascot deep-orange, prompt=blinking '?' (and the WHOLE tile pulses if ANY session is prompt), idle=fade bar (see idle_level) + idle_ago, shell=mascot electric-cyan, empty=no indicator, just the bare shortcut (desktop has no session or window — the producer's absent-desktop placeholder)."
           },
           "idle_level": {
             "type": "integer", "minimum": 0, "maximum": 6, "default": 0,

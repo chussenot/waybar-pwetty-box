@@ -63,9 +63,9 @@ Each `sessions[]` entry:
 | `idle_ago`   | string      | REAL-derived | when `state=idle`: e.g. `12m`, beside the bar |
 
 Indicators: `working`→deep-orange Claude mascot, `shell`→electric-cyan mascot,
-`idle`→fade bar + `idle_ago`, `prompt`→blinking `?`, `empty`→dim hollow ring (no
-session and no window on the desktop). If **any** session is `prompt`, the
-**whole tile pulses** (one attention signal per desktop).
+`idle`→fade bar + `idle_ago`, `prompt`→blinking `?`, `empty`→no indicator at all
+(bare shortcut — no session and no window on the desktop). If **any** session is
+`prompt`, the **whole tile pulses** (one attention signal per desktop).
 
 > **Migration note.** The contract moved from flat per-session fields to a
 > `sessions` array. A single session is now `"sessions": [ { … } ]` (was the
