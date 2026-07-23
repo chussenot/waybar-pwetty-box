@@ -55,7 +55,7 @@ Each `sessions[]` entry:
 
 | field        | type        | source       | notes |
 |--------------|-------------|--------------|-------|
-| `state`      | enum        | REAL         | `working` \| `prompt` \| `idle` \| `shell` — drives the indicator |
+| `state`      | enum        | REAL         | `working` \| `prompt` \| `idle` \| `shell` \| `empty` — drives the indicator |
 | `folder`     | string      | REAL         | basename of the session `cwd` |
 | `title`      | string      | MOCK         | window title (wrapped when single, tickered when dual) |
 | `unpushed`   | integer     | MOCK         | `↑N` after the folder; hidden when 0 or idle |
@@ -63,8 +63,9 @@ Each `sessions[]` entry:
 | `idle_ago`   | string      | REAL-derived | when `state=idle`: e.g. `12m`, beside the bar |
 
 Indicators: `working`→deep-orange Claude mascot, `shell`→electric-cyan mascot,
-`idle`→fade bar + `idle_ago`, `prompt`→blinking `?`. If **any** session is
-`prompt`, the **whole tile pulses** (one attention signal per desktop).
+`idle`→fade bar + `idle_ago`, `prompt`→blinking `?`, `empty`→dim hollow ring (no
+session and no window on the desktop). If **any** session is `prompt`, the
+**whole tile pulses** (one attention signal per desktop).
 
 > **Migration note.** The contract moved from flat per-session fields to a
 > `sessions` array. A single session is now `"sessions": [ { … } ]` (was the
@@ -80,5 +81,5 @@ echo '{"shortcut":5,"sessions":[{"state":"working","folder":"api"}]}' \
   | pwetty render claude --data - -o /tmp/claude
 ```
 
-Samples in [`samples/`](./samples/): `working`, `prompt`, `idle`, `shell` (single
-sessions), `duo` (two sessions), `window` (a plain window).
+Samples in [`samples/`](./samples/): `working`, `prompt`, `idle`, `shell`, `empty`
+(single sessions), `duo` (two sessions), `window` (a plain window).
