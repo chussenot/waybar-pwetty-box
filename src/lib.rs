@@ -131,6 +131,10 @@ impl Drop for PwettyBox {
 const HOVER_FADE_MS: f64 = 160.0;
 const HOVER_COLOR: &str = "#b9c1d9";
 const HOVER_ALPHA: f64 = 0.6;
+/// Peak content zoom on hover — the tile's text (a desktop's shortcut number,
+/// say) swells a touch and settles back on leave. Discreet on purpose: past
+/// ~1.08 a wide tile's content starts hitting the widget's clip edge.
+const HOVER_SCALE: f64 = 1.06;
 
 /// Pointer-hover fade state. A flip records the alpha it started from, so a
 /// mid-fade reversal animates smoothly instead of jumping.
@@ -165,6 +169,12 @@ impl Hover {
         let p = (self.flipped.get().elapsed().as_secs_f64() * 1000.0 / HOVER_FADE_MS).min(1.0);
         let target = if self.inside.get() { 1.0 } else { 0.0 };
         self.from_alpha.get() + (target - self.from_alpha.get()) * p
+    }
+
+    /// Content zoom factor, tracking the same fade as [`Hover::alpha`] so the
+    /// ring and the scale move together (and reverse together mid-fade).
+    fn scale(&self) -> f64 {
+        1.0 + self.alpha() * (HOVER_SCALE - 1.0)
     }
 
     /// True while a fade is still in progress.
@@ -349,7 +359,18 @@ impl Module for PwettyBox {
                                 ));
                             }
                             let processed = &cache.as_ref().expect("just set above").1;
+                            // Hover zoom: swell the content about the tile centre
+                            // (background/ring stay put) so the number grows in
+                            // place and settles back on leave.
+                            let hs = hover.scale();
+                            let _ = cr.save();
+                            if hs > 1.0 {
+                                cr.translate(wl / 2.0, hl / 2.0);
+                                cr.scale(hs, hs);
+                                cr.translate(-wl / 2.0, -hl / 2.0);
+                            }
                             draw_processed(cr, processed, wl, hl, &shared.config, Some(&mut fx));
+                            let _ = cr.restore();
                         }
                     }
                 }
@@ -1808,6 +1829,11 @@ mod tests {
         h.set(false);
         std::thread::sleep(wait);
         assert_eq!(h.alpha(), 0.0);
+        // Content zoom rides the same fade: rest at 1.0, peak at HOVER_SCALE.
+        assert_eq!(h.scale(), 1.0);
+        h.set(true);
+        std::thread::sleep(wait);
+        assert_eq!(h.scale(), HOVER_SCALE);
     }
 
     #[test]
