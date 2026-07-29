@@ -1,3 +1,5 @@
 export.auto: true
 routing:
-  mode: maintainer
+    mode: maintainer
+sync:
+    remote: "git+ssh://git@github.com/mrzor/waybar-pwetty-box.git"
