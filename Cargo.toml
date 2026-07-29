@@ -51,6 +51,7 @@ name = "pwetty"
 path = "src/bin/pwetty.rs"
 
 [dev-dependencies]
+boon = "0.6"
 image = "0.25"
 
 [profile.release]

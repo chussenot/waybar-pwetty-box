@@ -1,0 +1,7 @@
+{
+  "shortcut": 6,
+  "items": [
+    { "kind": "session", "state": "working", "folder": "pwetty-box-rs", "title": "unify sessions and windows into items[] rows", "unpushed": 2 },
+    { "kind": "app", "app": "kitty", "app_icon": "terminal", "title": "cargo test --release — 42 passed; 0 failed" }
+  ]
+}

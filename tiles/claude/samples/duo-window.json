@@ -1,0 +1,8 @@
+{
+  "shortcut": 4,
+  "active": true,
+  "items": [
+    { "kind": "app", "app": "VS Code", "app_icon": "code", "title": "schema.json — pwetty-box-rs — Visual Studio Code" },
+    { "kind": "app", "app": "Firefox", "app_icon": "/usr/share/icons/hicolor/scalable/apps/firefox.svg", "title": "JSON Schema draft-07: conditional subschemas and anyOf — Mozilla Firefox" }
+  ]
+}
