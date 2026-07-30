@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# A newer push to the same ref makes the older run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: fmt · clippy · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build prerequisites are SYSTEM packages: the -sys crates (gtk-rs,
+      # pangocairo, epoxy, khronos-egl) need dev headers plus pkg-config .pc
+      # files. Same list mise.toml documents for local builds.
+      - name: System build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-3-dev libepoxy-dev libegl-dev libgl-dev
+
+      # rust-toolchain.toml pins the channel and the rustfmt/clippy components,
+      # so let rustup honour it instead of restating the version here.
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --release -- -D warnings
+      - run: cargo test --release
+
+  render:
+    name: offscreen render smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same headers as `gates`, plus Mesa's software stack so a surfaceless
+      # EGL context can be created and rendered with llvmpipe. No display
+      # server, no compositor, no /dev/dri.
+      - name: System build prerequisites + software GL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-3-dev libepoxy-dev libegl-dev libgl-dev \
+            libegl-mesa0 libgl1-mesa-dri
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo build --release --bin pwetty
+
+      # Template <-> schema <-> samples must agree for every bundled tile.
+      - name: Contract check
+        run: ./target/release/pwetty check
+
+      # Then actually rasterise every sample. This is the check that catches
+      # layout regressions the unit tests cannot see. Runners have no Terminus
+      # font so Pango substitutes — fine for a smoke test, which is why this
+      # asserts "renders without error" and never compares pixels.
+      - name: Render every sample offscreen
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          ./target/release/pwetty render claude --all-states -o shots
+          ./target/release/pwetty render empty --all-states -o shots
+          ls -l shots
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tile-renders
+          path: shots/
+          if-no-files-found: error
