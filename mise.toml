@@ -1,0 +1,15 @@
+# mise-managed tool deps for pwetty-box-rs.
+#
+# Build prerequisites are SYSTEM packages — a C toolchain/linker plus the dev
+# headers + pkg-config .pc files for the -sys crates (gtk-rs, pangocairo,
+# epoxy, khronos-egl). mise can't manage these; install via your distro.
+# On Debian/Ubuntu (libgtk-3-dev pulls pango/cairo/glib dev transitively):
+#   sudo apt install build-essential pkg-config libgtk-3-dev \
+#                    libepoxy-dev libegl-dev libgl-dev
+
+[tools]
+# Rust toolchain. Kept in step with rust-toolchain.toml (MSRV 1.88, pinned 1.92);
+# core:rust honors rust-toolchain.toml, so the repo pin stays authoritative.
+rust = "1.92"
+# go-task: runner for the Taskfile (build / install).
+task = "latest"

@@ -1,0 +1,30 @@
+version: '3'
+
+# Task runner for pwetty-box-rs. `task` is provided by mise (see mise.toml).
+#   task build     -> cargo build --release
+#   task install   -> copy the release artifacts into the pinned waybar location
+
+tasks:
+  build:
+    desc: Build the release cdylib (libpwetty_box.so) + pwetty CLI
+    cmds:
+      - cargo build --release
+
+  install:
+    desc: Install libpwetty_box.so + pwetty into ~/.local/lib/pwetty (override with PWETTY_PIN)
+    deps: [build]
+    cmds:
+      - |
+        set -eu
+        PIN="${PWETTY_PIN:-$HOME/.local/lib/pwetty}"
+        SRC="{{.ROOT_DIR}}/target/release"
+        mkdir -p "$PIN"
+        # Atomic replace via rename, so a running waybar dlopen'ing the old .so
+        # inode is undisturbed (no ETXTBSY, no half-written file). Mirrors the
+        # existing `pwetty-promote` convention.
+        for f in libpwetty_box.so pwetty; do
+          cp "$SRC/$f" "$PIN/$f.tmp"
+          mv "$PIN/$f.tmp" "$PIN/$f"
+        done
+        chmod +x "$PIN/pwetty"
+        echo "installed pwetty -> $PIN (restart waybar to load: systemctl --user restart waybar)"
