@@ -20,7 +20,7 @@ jobs:
     name: fmt · clippy · test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Build prerequisites are SYSTEM packages: the -sys crates (gtk-rs,
       # pangocairo, epoxy, khronos-egl) need dev headers plus pkg-config .pc
@@ -48,7 +48,7 @@ jobs:
     name: offscreen render smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Same headers as `gates`, plus Mesa's software stack so a surfaceless
       # EGL context can be created and rendered with llvmpipe. No display
@@ -87,7 +87,7 @@ jobs:
           ./target/release/pwetty render empty --all-states -o shots
           ls -l shots
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tile-renders
           path: shots/
