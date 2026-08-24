@@ -1,0 +1,29 @@
+{
+  "shortcut": 4,
+  "active": true,
+  "items": [
+    {
+      "kind": "session",
+      "state": "idle",
+      "folder": "project-manager",
+      "idle_level": 4,
+      "idle_ago": "4h",
+      "title": "adopt-claude-code-worktrees",
+      "win_id": 68
+    },
+    {
+      "kind": "session",
+      "state": "working",
+      "folder": "project-manager",
+      "title": "6 agents · 4 working",
+      "win_id": 68,
+      "fleet": {
+        "total": 6, "live": 6, "awaiting": 0, "working": 4, "blocked": 2, "idle": 0, "done": 0,
+        "demands": ["working", "working", "working", "working", "blocked", "blocked"],
+        "neediest": "project-manager-dispatcher",
+        "needs": "",
+        "scope": "owned"
+      }
+    }
+  ]
+}

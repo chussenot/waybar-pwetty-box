@@ -99,6 +99,29 @@
           "unpushed": {
             "type": "integer", "minimum": 0,
             "description": "MOCK. Session rows only. Unpushed commit count; shown as ↑N after the folder (hidden when 0 or idle)."
+          },
+          "fleet": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["total", "live", "demands"],
+            "description": "REAL. Present when this row stands for a set of BACKGROUND AGENTS rather than one conversation — either the desktop is running the `claude agents` view (scope=whole, every agent on the machine) or its session spawned them (scope=owned). NOTE the row stays a SESSION row: `state` is still required and still drives the indicator and the tile-wide pulse, so a template that ignores `fleet` renders it as an ordinary session. That is deliberate — `kind` is a closed enum, so there is no `kind: \"fleet\"`. The row's `state` is derived from the fleet: prompt when any agent awaits a human, working, shell when the fleet is blocked on itself, else idle aged on the FLEET's newest activity.",
+            "properties": {
+              "total":    { "type": "integer", "minimum": 0, "description": "Agents in the set." },
+              "live":     { "type": "integer", "minimum": 0, "description": "Agents that have not finished." },
+              "awaiting": { "type": "integer", "minimum": 0, "description": "Agents waiting on a HUMAN. Non-zero is what makes the row `prompt` and pulses the tile." },
+              "working":  { "type": "integer", "minimum": 0 },
+              "blocked":  { "type": "integer", "minimum": 0, "description": "Blocked on another agent, NOT on a person." },
+              "idle":     { "type": "integer", "minimum": 0 },
+              "done":     { "type": "integer", "minimum": 0 },
+              "demands": {
+                "type": "array",
+                "description": "One entry PER AGENT, worst first — this is the bead strip, in order. The template paints one bead per entry, coloured by demand, and groups them where the demand changes.",
+                "items": { "type": "string", "enum": ["awaits-human", "working", "blocked", "idle", "done"] }
+              },
+              "neediest": { "type": "string", "description": "Name of the agent that set the worst demand. Can be long: an agent spawned without --name is titled from its intent (a real one reads `Review baroque database replica configuration`), so the template clips." },
+              "needs":    { "type": "string", "description": "That agent's ask, VERBATIM and unclipped — a real value ran ~600 characters (a whole AskUserQuestion with its options). The producer deliberately does not truncate; clipping is the template's job, and it must clip or a wrapped ask grows the tile past its fixed height." },
+              "scope":    { "type": "string", "enum": ["whole", "owned"], "description": "`whole` = a console desktop (the agent view is machine-wide); `owned` = this desktop's session spawned them." }
+            }
           }
         }
       }

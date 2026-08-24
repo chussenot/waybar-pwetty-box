@@ -76,6 +76,55 @@ Indicators: `working`→deep-orange Claude mascot, `shell`→electric-cyan masco
 inline. If **any** session row is `prompt`, the **whole tile pulses** (one
 attention signal per desktop).
 
+### Background agents: the bead strip
+
+A row can stand for a set of **background agents** instead of one conversation,
+by carrying a `fleet` object. Two desktops get one: the one running the
+`claude agents` view (`scope: "whole"` — the view is machine-wide, so it shows
+every agent), and one whose session spawned agents (`scope: "owned"`).
+
+```
+single (a console desktop)              dual (a conversation + its agents)
+┌──────────────────────────────┐       ┌────────────────────────────┐
+│ 5  ?  agents ⚠3 10/13        │       │      ▤▤ project-manager 4h │
+│ ▮▮▮ ▮▮▮▮ ▮ ▮▮ ▮▮▮            │       │ 4    adopt-worktrees…      │
+│ project-manager-integrator:  │       │      project-man 6/6       │
+│ answer: Chamber 7 handed of… │       │      ▮▮▮▮ ▮▮               │
+└──────────────────────────────┘       └────────────────────────────┘
+```
+
+One bead per agent, in `demands` order (already worst-first), grouped where the
+demand changes:
+
+| demand | bead | means |
+|---|---|---|
+| `awaits-human` | yellow | waiting on YOU — also makes the row `prompt`, so the tile pulses |
+| `working` | peach | making progress |
+| `blocked` | sapphire | stopped, but on another agent — not on you |
+| `idle` | grey | alive, at rest |
+| `done` | dark grey | finished |
+
+Past 13 beads it draws 13 and a `+N`, rather than shrinking them below reading
+size.
+
+**The row is still a session row.** `state` is required and still drives the
+indicator and the tile-wide pulse, so a template that knows nothing about
+`fleet` renders it as an ordinary session — which is the whole reason the
+producer can ship the field before a renderer supports it. There is deliberately
+no `kind: "fleet"`: `kind` is a closed enum and rows are discriminated by
+`state`.
+
+**Two things the template has to defend against**, both from real data:
+
+- `needs` arrives **unclipped** — one live value was ~600 characters, an entire
+  AskUserQuestion with its options. The producer sends full fidelity on purpose
+  and leaves clipping to the consumer, so the template clips; a wrapped 600-char
+  ask would grow past the tile's fixed height and get cut mid-word.
+- `neediest` is not always a short handle. An agent spawned without `--name` is
+  titled from its intent — a real one reads `Review baroque database replica
+  configuration` — so the dual layout clips the label too, and clips the FOLDER
+  rather than the counts, because a cut-off `6/` is worse than a shortened name.
+
 > **Migration note.** The contract moved from flat per-session fields to a
 > `sessions` array. A single session is now `"sessions": [ { … } ]` (was the
 > fields at top level). Window payloads are unchanged.
