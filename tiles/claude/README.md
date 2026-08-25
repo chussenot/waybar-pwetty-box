@@ -41,6 +41,15 @@ waybar bar is a single shared height — so size the bar for the dual case
 (**~96px** at the default font; the preset's own default). One-row tiles simply
 use the extra room. Set `"height"` once on the bar.
 
+**Bar width — calibrate against the bar, not the preset.** A waybar module
+overrides the preset's `width`, and the live bar does: every `cffi/pwetty#N`
+module in `~/.config/waybar/config.jsonc` sets `"width": 179`. That is the
+width the tile actually paints at, so the preset's default is 179 too, and
+every text budget in the template — the folder clips, the ask clip, the bead
+cap, the ticker box — is calibrated by rendering at 179. If your modules are
+wider, re-render and re-tune against *your* width; tuning against the preset's
+default is how the bead strip first shipped a layout ~25% wider than the bar's.
+
 ## The data contract
 
 `exec` stdout (or static `text`) is a JSON object matching
@@ -69,7 +78,7 @@ Each `items[]` row:
 | `idle_ago`   | string      | REAL-derived | session rows, when `state=idle`: e.g. `12m`, beside the bar |
 | `app`        | string      | window       | app rows, required: the app/window label |
 | `app_icon`   | string      | window       | app rows, required: bundled icon name (e.g. `code`) or absolute `.svg` path |
-| `title`      | string      | MOCK         | either kind: window title (wrapped with one row, tickered with two) |
+| `title`      | string      | MOCK         | either kind: window title — wrapped with one row (clipped to 44 chars, which is three lines at 179px), tickered with two |
 
 Indicators: `working`→deep-orange Claude mascot, `shell`→electric-cyan mascot,
 `idle`→fade bar + `idle_ago`, `prompt`→blinking `?`, an app row→its own icon
@@ -84,13 +93,13 @@ by carrying a `fleet` object. Two desktops get one: the one running the
 every agent), and one whose session spawned agents (`scope: "owned"`).
 
 ```
-single (a console desktop)              dual (a conversation + its agents)
-┌──────────────────────────────┐       ┌────────────────────────────┐
-│ 5  ?  agents ⚠3 10/13        │       │      ▤▤ project-manager 4h │
-│ ▮▮▮ ▮▮▮▮ ▮ ▮▮ ▮▮▮            │       │ 4    adopt-worktrees…      │
-│ project-manager-integrator:  │       │      project-man 6/6       │
-│ answer: Chamber 7 handed of… │       │      ▮▮▮▮ ▮▮               │
-└──────────────────────────────┘       └────────────────────────────┘
+single (a console desktop)          dual (a conversation + its agents)
+┌────────────────────────┐         ┌────────────────────────┐
+│ 5  ?  agents ⚠3        │         │    ▤▤ 4h project-…     │
+│ ▮▮▮ ▮▮▮▮ ▮ ▮▮ ▮▮▮ 10/13│         │ 4  adopt-worktrees…    │
+│ project-mana…:         │         │    ▮▮▮▮ ▮▮ 6/6         │
+│ answer: Chamber 7 h…   │         │                        │
+└────────────────────────┘         └────────────────────────┘
 ```
 
 One bead per agent, in `demands` order (already worst-first), grouped where the
@@ -104,8 +113,12 @@ demand changes:
 | `idle` | grey | alive, at rest |
 | `done` | dark grey | finished |
 
-Past 13 beads it draws 13 and a `+N`, rather than shrinking them below reading
-size.
+The strip is capped rather than shrunk below reading size: 13 beads in the
+single layout, 9 in the dual one, where the shortcut gutter takes the width. The
+`live/total` tally closes the strip's line and says how many agents there really
+are — it used to sit on the label line, but at 179 that line cannot hold a
+folder, a `⚠N` and a tally, and the beads' own line has the room to spare. The
+tally also retired the old `+N` overflow chip, which said the same thing twice.
 
 **The row is still a session row.** `state` is required and still drives the
 indicator and the tile-wide pulse, so a template that knows nothing about
@@ -114,16 +127,25 @@ producer can ship the field before a renderer supports it. There is deliberately
 no `kind: "fleet"`: `kind` is a closed enum and rows are discriminated by
 `state`.
 
-**Two things the template has to defend against**, both from real data:
+**Three things the template has to defend against**, all from real data:
 
 - `needs` arrives **unclipped** — one live value was ~600 characters, an entire
   AskUserQuestion with its options. The producer sends full fidelity on purpose
   and leaves clipping to the consumer, so the template clips; a wrapped 600-char
-  ask would grow past the tile's fixed height and get cut mid-word.
+  ask would grow past the tile's fixed height and get cut mid-word. Under the
+  label and the strip, 179px leaves the ask **two wrapped lines** of `small`
+  text, which hold ~34 characters of prose — so that is the clip, and the third
+  line the old 56-character clip reached at this width is gone.
 - `neediest` is not always a short handle. An agent spawned without `--name` is
   titled from its intent — a real one reads `Review baroque database replica
-  configuration` — so the dual layout clips the label too, and clips the FOLDER
-  rather than the counts, because a cut-off `6/` is worse than a shortened name.
+  configuration` — so it gets its own 12-character budget inside the ask line;
+  without one it would eat both lines and the ask would never show.
+- A **folder** does not fit either: after the indicator, the label line holds
+  about ten characters, fewer when it also carries a `⚠N`/`↑N` badge or an idle
+  `12m`, so both layouts clip it (and tolerate one character of overshoot,
+  because swapping a character for an ellipsis of the same width buys nothing).
+  The FOLDER is what gets clipped — a cut-off `6/` is worse than a shortened
+  name — which is now structural: the counts moved off that line entirely.
 
 > **Migration note.** The contract moved from flat per-session fields to a
 > `sessions` array. A single session is now `"sessions": [ { … } ]` (was the
