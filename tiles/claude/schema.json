@@ -116,11 +116,11 @@
               "demands": {
                 "type": "array",
                 "description": "One entry PER AGENT, worst first — this is the bead strip, in order. The template paints one bead per entry, coloured by demand, and groups them where the demand changes.",
-                "items": { "type": "string", "enum": ["awaits-human", "working", "blocked", "idle", "done"] }
+                "items": { "type": "string", "enum": ["awaits-human", "working", "blocked", "idle", "unknown", "done"] }
               },
               "neediest": { "type": "string", "description": "Name of the agent that set the worst demand. Can be long: an agent spawned without --name is titled from its intent (a real one reads `Review baroque database replica configuration`), so the template clips." },
               "needs":    { "type": "string", "description": "That agent's ask, VERBATIM and unclipped — a real value ran ~600 characters (a whole AskUserQuestion with its options). The producer deliberately does not truncate; clipping is the template's job, and it must clip or a wrapped ask grows the tile past its fixed height." },
-              "scope":    { "type": "string", "enum": ["whole", "owned"], "description": "`whole` = a console desktop (the agent view is machine-wide); `owned` = this desktop's session spawned them." }
+              "scope":    { "type": "string", "enum": ["whole", "owned", "herd"], "description": "`whole` = a console desktop (the agent view is machine-wide); `owned` = this desktop's session spawned them; `herd` = a herdr workspace, i.e. one multiplexer pane group." }
             }
           }
         }
