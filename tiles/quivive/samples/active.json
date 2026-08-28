@@ -1,23 +1,42 @@
 {
   "v": 1,
+  "at": "2026-08-28T09:00:00Z",
   "status": "active",
   "repos": [
     {
       "name": "quivive",
+      "path": "/home/user/repos/quivive",
       "status": "active",
-      "agents": { "active": 2, "idle": 1, "stale": 0, "dead": 0 },
+      "agents": {
+        "active": 2,
+        "idle": 1,
+        "stale": 0,
+        "dead": 0
+      },
       "attention": []
     },
     {
       "name": "pact",
+      "path": "/home/user/repos/pact",
       "status": "drained",
-      "agents": { "active": 0, "idle": 0, "stale": 0, "dead": 0 },
+      "agents": {
+        "active": 0,
+        "idle": 0,
+        "stale": 0,
+        "dead": 0
+      },
       "attention": []
     },
     {
       "name": "recount",
+      "path": "/home/user/repos/recount",
       "status": "all-quiet",
-      "agents": { "active": 0, "idle": 0, "stale": 0, "dead": 0 },
+      "agents": {
+        "active": 0,
+        "idle": 0,
+        "stale": 0,
+        "dead": 0
+      },
       "attention": []
     }
   ]

@@ -50,6 +50,7 @@ module (`interval`-polled instead of pushed).
 | field    | type   | source | notes |
 |----------|--------|--------|-------|
 | `v`      | int    | REAL   | tile contract version |
+| `at`     | string | REAL   | RFC 3339, UTC — the clock this tick was computed against. Not rendered by this tile (the header uses `status` alone), but present on every real payload and kept in the samples for fidelity |
 | `status` | enum   | REAL   | overall status, same five values and precedence as each repo's own `status` below, aggregated across every watched repo |
 | `repos`  | array  | REAL   | one entry per repo quivive's tick read this cycle |
 
@@ -57,7 +58,8 @@ Each `repos[]` entry:
 
 | field       | type   | source | notes |
 |-------------|--------|--------|-------|
-| `name`      | string | MOCK   | short label for the row. quivive's tick currently identifies a repo by its absolute registry path, not a short name — see [Divergence note](#divergence-note) below |
+| `name`      | string | REAL   | the repo's directory basename — what a bar has room to print |
+| `path`      | string | REAL   | the full, canonicalized path — disambiguates two checkouts sharing a `name`. Not currently rendered (no row has room for it) |
 | `status`    | enum   | REAL   | `human-needed` \| `active` \| `drained` \| `all-quiet` \| `no-fleet` — this repo's own derived status |
 | `agents`    | object | REAL   | `{active, idle, stale, dead}` counts, always all four keys, zeros included |
 | `attention` | array  | REAL   | this repo's attention items, sorted, deterministic; empty when not `human-needed` |
@@ -78,18 +80,22 @@ the row's own status: active green, idle blue, stale yellow, dead red — so a
 `STALE`/`DEAD` count reads as a warning even in a row whose own `status` isn't
 `human-needed` yet.
 
-### Divergence note
+### Reconciled with quivive's real emitter
 
-`repos[].name` is the one field this tile invents rather than derives:
-quivive's own state seam (`src/state.rs`) and `docs/tile-contract.md` (as of
-this tile's authoring) key a repo by its absolute registry path, not a short
-display name. Every sample here uses an invented short name (`quivive`,
-`pact`, `recount`, …) purely to keep rows narrow and readable. Whichever key
-quivive's real `tile` command ends up emitting — a short name, a path
-basename, or the full path — the template only ever prints whatever string
-arrives in `name`; nothing here hardcodes a transform. The golden tests
-(`quivive-jx3`, both repos) are where quivive's real emitted bytes and this
-tile's samples get reconciled.
+Every field above, including `name`, is now REAL: the samples in
+[`samples/`](./samples/) are quivive's actual `quivive tile` output (module
+`goldens.rs` in the quivive repo, fixtures for exactly these five scenarios),
+not hand-authored JSON. `repos[].name` was the one field an earlier draft of
+this tile invented (a short display name, guessed ahead of quivive's own
+`tile-contract.md` settling on `name`+`path`); that guess turned out to match
+what quivive actually emits, so reconciliation only added `path` and fixed the
+indentation to match quivive's own `serde_json::to_string_pretty` output
+byte-for-byte — see `quivive-jx3`'s goldens in the quivive repo, which pin
+these same five files as `tests/goldens/{all-quiet,active,human-needed,
+drained,no-fleet}.json`. **Sync rule**: those quivive-side files are the
+source of truth; a change here without a matching change there (or vice
+versa) is a bug caught by quivive's own `cargo test --test goldens`, not by
+anything in this repo.
 
 ## Inspecting / previewing
 
@@ -97,7 +103,7 @@ tile's samples get reconciled.
 pwetty schema quivive
 pwetty check quivive
 pwetty render quivive --all-states -o /tmp/quivive        # PNGs of every sample
-echo '{"v":1,"status":"active","repos":[{"name":"quivive","status":"active","agents":{"active":2,"idle":1,"stale":0,"dead":0},"attention":[]}]}' \
+echo '{"v":1,"status":"active","repos":[{"name":"quivive","path":"/home/user/repos/quivive","status":"active","agents":{"active":2,"idle":1,"stale":0,"dead":0},"attention":[]}]}' \
   | pwetty render quivive --data - -o /tmp/quivive
 ```
 

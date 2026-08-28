@@ -12,6 +12,11 @@
       "description": "REAL. The tile contract version. Moves only on a breaking change (S12/S13 of docs/spec.md in the quivive repo); a consumer ignores fields it doesn't know.",
       "examples": [1]
     },
+    "at": {
+      "type": "string",
+      "description": "REAL. RFC 3339, UTC. The clock this tick was computed against — not \"now\" at read time, and read exactly once for the whole payload. Not currently used by this tile's template (the header renders from `status` alone), so it is not `required` here, but every real `quivive tile` payload carries it.",
+      "examples": ["2026-08-28T09:00:00Z"]
+    },
     "status": {
       "type": "string",
       "enum": ["human-needed", "active", "drained", "all-quiet", "no-fleet"],
@@ -19,16 +24,21 @@
     },
     "repos": {
       "type": "array",
-      "description": "REAL (the array and each repo's own fields are quivive's computation; see `name` below for the one field whose exact key/shape is still open). One entry per repository quivive's tick read this cycle.",
+      "description": "REAL. One entry per repository quivive's tick read this cycle, in registry order.",
       "items": {
         "type": "object",
-        "required": ["name", "status", "agents", "attention"],
+        "required": ["name", "path", "status", "agents", "attention"],
         "additionalProperties": true,
         "properties": {
           "name": {
             "type": "string",
-            "description": "MOCK. A short, human-readable label for the repo. Every sample here invents one (e.g. 'quivive', 'pact') to keep rows readable — quivive's own tick currently identifies a repo by its absolute registry path (see docs/tile-contract.md in the quivive repo), not a short name, so whether the real emitter sends this exact key, a basename, or the full path is still open. Whichever it settles on, the template only ever prints whatever string arrives here.",
+            "description": "REAL. The repo's directory basename — what a bar has room to print. Reconciled against quivive's real emitter by the golden tests in both repos (quivive-jx3); previously invented per sample, see the README's former divergence note.",
             "examples": ["quivive", "pact", "recount"]
+          },
+          "path": {
+            "type": "string",
+            "description": "REAL. The full, canonicalized path — what a human needs when two checkouts share a `name`. Not rendered by this tile's template today (no row has room for it), but part of the real payload and kept in the samples for byte-for-byte fidelity with quivive-jx3's goldens.",
+            "examples": ["/home/user/repos/quivive"]
           },
           "status": {
             "type": "string",
