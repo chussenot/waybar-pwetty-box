@@ -64,16 +64,10 @@ fn main() {
                 let g = data[px + 1] as u32;
                 let r = data[px + 2] as u32;
                 let a = data[px + 3] as u32;
-                // Un-premultiply.
-                let (ru, gu, bu) = if a == 0 {
-                    (0, 0, 0)
-                } else {
-                    (
-                        (r * 255 / a).min(255) as u8,
-                        (g * 255 / a).min(255) as u8,
-                        (b * 255 / a).min(255) as u8,
-                    )
-                };
+                // Un-premultiply. A fully transparent pixel divides by zero
+                // and has no colour to recover, so it reads back as black.
+                let un = |c: u32| (c * 255).checked_div(a).unwrap_or(0).min(255) as u8;
+                let (ru, gu, bu) = (un(r), un(g), un(b));
                 rgba.push(ru);
                 rgba.push(gu);
                 rgba.push(bu);

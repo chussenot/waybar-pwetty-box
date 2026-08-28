@@ -2,29 +2,29 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "pwetty:tile/quivive",
   "title": "quivive tile data",
-  "description": "Data for the bundled `quivive` tile: the fleet-presence status bar for one or more repositories that quivive watches. The tile is DATA-DRIVEN — waybar always references `quivive`, and the template renders by what you send: a header driven by the overall `status`, one compact row per entry in `repos[]`, and an attention line per attention item any repo carries. Feed it as `quivive tile --stream`'s stdout (JSON) or, one-shot, `quivive tile`. Each property notes REAL (quivive computed it from the ledger: leases, activity records, the events tail, plan.json, the beads sidecar) vs MOCK (a sample invented it; quivive's own emission of that field is not yet settled — see the README's divergence note).",
+  "description": "Data for the bundled `quivive` tile: the fleet-presence status bar for one or more repositories that quivive watches. The tile is DATA-DRIVEN — waybar always references `quivive`, and the template renders by what you send: a header driven by the overall `status`, one compact row per entry in `repos[]`, and an attention line per attention item any repo carries. Feed it as `quivive tile --stream`'s stdout (JSON) or, one-shot, `quivive tile`. The contract this schema transcribes lives in the quivive repo (`docs/tile-contract.md`); that page is the source of truth and this file follows it. Unknown fields are tolerated everywhere on purpose: adding a field is an additive change under that contract, and a consumer is required to ignore what it does not know. The five files in `samples/` are byte-identical copies of quivive's `tests/goldens/{all-quiet,active,human-needed,drained,no-fleet}.json` — never hand-edit one side.",
   "type": "object",
-  "required": ["v", "status", "repos"],
+  "required": ["v", "at", "status", "repos"],
   "additionalProperties": true,
   "properties": {
     "v": {
       "type": "integer",
-      "description": "REAL. The tile contract version. Moves only on a breaking change (S12/S13 of docs/spec.md in the quivive repo); a consumer ignores fields it doesn't know.",
+      "description": "The tile contract version. Moves only on a breaking change — a removed or renamed field, a changed type, a changed meaning, or a changed severity order (S12/S13 of docs/spec.md in the quivive repo).",
       "examples": [1]
     },
     "at": {
       "type": "string",
-      "description": "REAL. RFC 3339, UTC. The clock this tick was computed against — not \"now\" at read time, and read exactly once for the whole payload. Not currently used by this tile's template (the header renders from `status` alone), so it is not `required` here, but every real `quivive tile` payload carries it.",
+      "description": "RFC 3339, UTC. The clock this tick was computed against — not \"now\" at read time, and read exactly once for the whole payload, however many repos it covers. This tile's template does not render it (the header renders from `status` alone), but every payload carries it.",
       "examples": ["2026-08-28T09:00:00Z"]
     },
     "status": {
       "type": "string",
       "enum": ["human-needed", "active", "drained", "all-quiet", "no-fleet"],
-      "description": "REAL. The overall status across every watched repo — one of quivive's five S8 states, in the same precedence order S8 derives per-repo status: human-needed (any repo has an attention item) beats active (any repo has a live agent) beats drained (a plan or recent fleet evidence exists somewhere but nothing is live) beats all-quiet (pact state exists but nothing is moving) beats no-fleet (no pact state anywhere). Drives the tile's accent icon/color and whether it pulses."
+      "description": "The overall status across every watched repo — one of quivive's five S8 states, in the same precedence order S8 derives per-repo status: human-needed (any repo has an attention item) beats active (any repo has a live agent) beats drained (a plan or recent fleet evidence exists somewhere but nothing is live) beats all-quiet (pact state exists but nothing is moving) beats no-fleet (no pact state anywhere). Nothing in the payload encodes that order — it is the renderer's, and it drives the tile's accent icon/colour and whether it pulses."
     },
     "repos": {
       "type": "array",
-      "description": "REAL. One entry per repository quivive's tick read this cycle, in registry order.",
+      "description": "One entry per repository quivive's tick read this cycle, in registry order. Empty when the registry is empty or missing, which reads as an overall `no-fleet`.",
       "items": {
         "type": "object",
         "required": ["name", "path", "status", "agents", "attention"],
@@ -32,34 +32,34 @@
         "properties": {
           "name": {
             "type": "string",
-            "description": "REAL. The repo's directory basename — what a bar has room to print. Reconciled against quivive's real emitter by the golden tests in both repos (quivive-jx3); previously invented per sample, see the README's former divergence note.",
+            "description": "The repo's directory basename — what a bar has room to print. Two checkouts of the same project share it; `path` is what tells them apart.",
             "examples": ["quivive", "pact", "recount"]
           },
           "path": {
             "type": "string",
-            "description": "REAL. The full, canonicalized path — what a human needs when two checkouts share a `name`. Not rendered by this tile's template today (no row has room for it), but part of the real payload and kept in the samples for byte-for-byte fidelity with quivive-jx3's goldens.",
+            "description": "The full, canonicalized path — what a human needs when two checkouts share a `name`. Not rendered by this tile's template today (no row has room for it), but part of the payload and kept in the samples for byte-for-byte fidelity with quivive's goldens.",
             "examples": ["/home/user/repos/quivive"]
           },
           "status": {
             "type": "string",
             "enum": ["human-needed", "active", "drained", "all-quiet", "no-fleet"],
-            "description": "REAL. This repo's own S8 status (RepoAssessment.status)."
+            "description": "This repo's own S8 status (RepoAssessment.status). The payload's overall `status` is the worst of these."
           },
           "agents": {
             "type": "object",
-            "description": "REAL. Counts over this repo's remembered agents, one bucket per state of the four-state machine (S7: ACTIVE/IDLE/STALE/DEAD). Always all four keys, zeros included.",
+            "description": "Counts over this repo's remembered agents, one bucket per state of the four-state machine (S7: ACTIVE/IDLE/STALE/DEAD). Always all four keys, zeros included. Counts, not a per-agent list — `quivive why` (S21) is where a human goes for names.",
             "required": ["active", "idle", "stale", "dead"],
-            "additionalProperties": false,
+            "additionalProperties": true,
             "properties": {
-              "active": { "type": "integer", "minimum": 0, "description": "REAL." },
-              "idle": { "type": "integer", "minimum": 0, "description": "REAL." },
-              "stale": { "type": "integer", "minimum": 0, "description": "REAL." },
-              "dead": { "type": "integer", "minimum": 0, "description": "REAL." }
+              "active": { "type": "integer", "minimum": 0, "description": "Agents seen working this cycle." },
+              "idle": { "type": "integer", "minimum": 0, "description": "Agents alive but not currently working." },
+              "stale": { "type": "integer", "minimum": 0, "description": "Agents past the stale threshold — quiet, not yet presumed gone. A stale holder never produces a `dead_holding_paths` item." },
+              "dead": { "type": "integer", "minimum": 0, "description": "Agents past the dead threshold — presumed gone; any lease one still holds is an attention item." }
             }
           },
           "attention": {
             "type": "array",
-            "description": "REAL. This repo's attention items (RepoAssessment.attention, S16-S18), already sorted and deterministic. Empty when the repo is not human-needed.",
+            "description": "This repo's attention items (RepoAssessment.attention, S16-S18), already sorted and deterministic. Empty is the normal case; any non-empty array is what makes this repo's status `human-needed`.",
             "items": { "$ref": "#/definitions/attentionItem" }
           }
         }
@@ -69,22 +69,22 @@
   "definitions": {
     "attentionItem": {
       "type": "object",
-      "comment": "Tagged union on `kind` (serde tag = \"kind\", rename_all = \"snake_case\"), mirroring quivive's AttentionItem exactly — see the state seam (src/state.rs) in the quivive repo. FleetDrained (S19) is deliberately absent: it's a transition event for `quivive watch`, not a per-repo attention item.",
+      "$comment": "Tagged union on `kind` (serde tag = \"kind\", rename_all = \"snake_case\"), mirroring quivive's AttentionItem exactly — see the state seam (src/state.rs) in the quivive repo. FleetDrained (S19) is deliberately absent: it's a transition event for `quivive watch`, not a per-repo attention item. A new `kind` is an additive change, so a renderer must skip one it does not know rather than fail.",
       "required": ["kind"],
       "oneOf": [
         {
           "properties": {
             "kind": { "const": "dead_holding_paths" },
-            "agent": { "type": "string", "description": "REAL. The dead (or unknown) holder's agent id." },
+            "agent": { "type": "string", "description": "The dead (or unknown) holder's agent id." },
             "paths": {
               "type": "array",
               "items": { "type": "string" },
-              "description": "REAL. That holder's held paths, sorted."
+              "description": "That holder's held paths, repo-relative and sorted. One item per holder, not per lease."
             },
             "remaining_ttl": {
               "type": "integer",
               "minimum": 0,
-              "description": "REAL. The minimum remaining lease TTL (seconds) across that holder's leases, clamped at 0."
+              "description": "Seconds until pact's sweeper reclaims the most urgent of that holder's leases — the minimum across them, clamped at 0 rather than left negative."
             }
           },
           "required": ["kind", "agent", "paths", "remaining_ttl"]
@@ -92,17 +92,17 @@
         {
           "properties": {
             "kind": { "const": "needs_decision" },
-            "bead_id": { "type": "string", "description": "REAL. A bead id filed as needing a decision, from the committed sidecar, verbatim." }
+            "bead_id": { "type": "string", "description": "A bead id filed as needing a decision, from the committed sidecar, verbatim." }
           },
           "required": ["kind", "bead_id"]
         },
         {
           "properties": {
             "kind": { "const": "gate_order_violation" },
-            "started_id": { "type": "string", "description": "REAL. The bead/task id that started work in a later wave." },
-            "started_wave": { "type": "integer", "description": "REAL. The wave `started_id` began in." },
-            "open_gate_id": { "type": "string", "description": "REAL. The earliest still-open gate blocking it — only the earliest is reported." },
-            "gate_wave": { "type": "integer", "description": "REAL. The wave `open_gate_id` belongs to." }
+            "started_id": { "type": "string", "description": "The bead/task id that started work in a later wave." },
+            "started_wave": { "type": "integer", "description": "The wave `started_id` began in." },
+            "open_gate_id": { "type": "string", "description": "The earliest still-open gate blocking it — only the earliest is reported, so closing gates one at a time does not reshuffle the set." },
+            "gate_wave": { "type": "integer", "description": "The wave `open_gate_id` belongs to." }
           },
           "required": ["kind", "started_id", "started_wave", "open_gate_id", "gate_wave"]
         }

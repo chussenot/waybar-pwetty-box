@@ -35,6 +35,21 @@ cargo build --release
 # -> target/release/libpwetty_box.so
 ```
 
+Or through the task runner, which is also what the loop below is:
+
+```bash
+mise run deps      # check the system libs a build needs (gtk3, egl, epoxy, waybar)
+mise run install   # build, put the `pwetty` CLI on PATH, restart waybar onto the new .so
+mise run check     # lint, tests, and every bundled tile's template/schema/samples
+mise tasks         # the rest: build, restart, tiles, test, fmt, lint
+```
+
+`install` restarts waybar rather than signalling it, and verifies the bar came
+back mapping the `.so` you just built: **`killall -SIGUSR2 waybar` does not pick
+up a rebuilt module.** Waybar reloads its config and recreates CFFI modules on
+that signal, but never `dlclose`/`dlopen`s the library — so the old code keeps
+running against a deleted inode, and a rebuild looks like it did nothing.
+
 ## Use in Waybar
 
 See [`examples/waybar-config.jsonc`](examples/waybar-config.jsonc). Minimal:

@@ -1,0 +1,119 @@
+# The task runner. `mise run install` is the whole loop in one command: build
+# the release `.so`, put the `pwetty` CLI on PATH, restart waybar onto it.
+#
+# No `[tools] rust` here, deliberately. rust-toolchain.toml pins the compiler
+# (1.92 — waybar-cffi needs >=1.85, femtovg >=1.88) and rustup honours it on the
+# first cargo invocation. Pinning a version here as well makes two files that can
+# disagree about the toolchain, which is the failure the pin exists to prevent.
+
+[tasks.deps]
+description = "Check the system libraries and binaries a build + install needs"
+# Checked, not installed: `sudo apt install` from a task runner is a surprise
+# nobody asked for, and this list is Debian/Ubuntu-shaped while the build is not.
+# pkg-config is the honest question — it is what the -sys crates themselves ask.
+# resvg, femtovg and minijinja are pure Rust and need nothing here.
+run = """
+set -eu
+missing=""
+for pkg in gtk+-3.0 pangocairo egl epoxy; do
+  pkg-config --exists "$pkg" || missing="$missing $pkg"
+done
+for bin in waybar killall setsid; do
+  command -v "$bin" >/dev/null 2>&1 || missing="$missing $bin"
+done
+if [ -n "$missing" ]; then
+  echo "missing:$missing" >&2
+  echo "on debian/ubuntu: sudo apt install libgtk-3-dev libegl-dev libepoxy-dev pkg-config waybar psmisc util-linux" >&2
+  exit 1
+fi
+echo "deps ok: $(pkg-config --modversion gtk+-3.0) gtk3, $(pkg-config --modversion egl) egl, waybar $(waybar --version 2>/dev/null | head -1)"
+"""
+
+[tasks.build]
+description = "Build the release .so waybar loads (and the pwetty CLI)"
+# Release, not debug, and the task encodes it rather than trusting a human to
+# remember: waybar's config points at target/release, and a debug build of a
+# per-frame Cairo/GL compositor is not a tile you want on a laptop battery.
+run = "cargo build --release"
+
+[tasks.install]
+description = "Build, put the pwetty CLI on PATH, and restart waybar onto the fresh .so"
+# The .so is not copied anywhere: every `module_path` in the waybar config points
+# straight at target/release, so building it IS installing it. What actually has
+# to happen after a build is the restart below — see that task for why.
+depends = ["build"]
+run = [
+  "install -Dm755 target/release/pwetty ~/.local/bin/pwetty",
+  "mise run restart",
+]
+
+[tasks.restart]
+description = "Restart waybar and verify it really mapped the current .so"
+# SIGUSR2 is NOT enough and this is the whole reason the task exists. Waybar
+# reloads its config and rebuilds CFFI modules on that signal but never
+# dlclose/dlopen's the library, so a rebuilt .so leaves the old code running
+# against a deleted inode — a rebuild that appears to do nothing, for hours.
+# Hence: kill, relaunch detached (niri's spawn-at-startup won't respawn it), then
+# compare the mapped inode against the file on disk and fail loudly if they
+# differ. A restart that cannot prove it loaded the new code is not a gate.
+run = """
+set -eu
+so=target/release/libpwetty_box.so
+log="${TMPDIR:-/tmp}/waybar.log"
+test -f "$so" || { echo "no $so — run: mise run build" >&2; exit 1; }
+killall waybar 2>/dev/null || true
+sleep 1
+XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-niri}" setsid -f waybar >"$log" 2>&1 </dev/null
+sleep 2
+pid=$(pgrep -n waybar) || { echo "waybar did not come up; see $log" >&2; exit 1; }
+live=$(awk '/libpwetty_box\\.so/ { print $5; exit }' "/proc/$pid/maps")
+disk=$(stat -c %i "$so")
+if [ "$live" != "$disk" ]; then
+  echo "waybar $pid is NOT running this build (mapped inode '${live:-none}', on disk $disk); see $log" >&2
+  exit 1
+fi
+echo "waybar $pid maps $so (inode $disk); log: $log"
+"""
+
+[tasks.tiles]
+description = "Validate every bundled tile: template <-> schema <-> samples"
+# The gate the quivive tile's contract names by hand ("run `pwetty check` there"
+# after syncing samples). Run through cargo, not the installed binary, so it
+# checks the tree you are editing rather than whatever was installed last.
+run = "cargo run --quiet --release --bin pwetty -- check"
+
+[tasks.test]
+description = "Run the test suite"
+run = "cargo test"
+
+[tasks.fmt]
+description = "Format the code"
+run = "cargo fmt"
+
+[tasks.fmt-check]
+description = "Check formatting without writing changes"
+# NOT part of `check`, and that is a statement about this tree rather than about
+# formatting: rustfmt currently wants two comment-alignment changes in lib.rs
+# that make the code worse (it reflows a two-line explanation of `halo` into a
+# trailing comment hanging off the previous statement). A gate that is red on
+# arrival is one people switch off, and a gate you go green by degrading a
+# comment is worse than none. Fix those two hunks and this belongs in `check`.
+run = "cargo fmt -- --check"
+
+[tasks.lint]
+description = "Run clippy with warnings denied, over all targets"
+# --all-targets: the default skips examples/, where the offscreen render paths
+# that nothing else compiles live.
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks.check]
+description = "Everything a change has to pass: lint, tests, tiles"
+# Sequential rather than `depends`, which runs in parallel: these legs share one
+# target/ directory and one release binary, and a lint rebuilding under a test
+# run is a race with a confusing failure. No `restart` leg — a check that kills
+# your bar is one you stop running.
+run = [
+  "mise run lint",
+  "mise run test",
+  "mise run tiles",
+]
