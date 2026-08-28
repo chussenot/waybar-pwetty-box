@@ -1,5 +1,13 @@
 # `quivive` tile
 
+![the tile rendering quivive's own fleet, mid-build](./fleet-tile.png)
+
+*Not a mockup: `quivive tile` run against quivive's own committed
+`.pact/events.jsonl`, rendered by this tile — the fleet that built quivive,
+seen through quivive, mid-build. pact records, recount explains, quivive stays
+on the qui-vive.*
+
+
 The fleet-presence status bar for every repository [quivive](https://github.com/chussenot/quivive)
 watches. **The tile is data-driven** — waybar always references `quivive`; the
 template renders from what you send, so you never tell waybar how many repos
