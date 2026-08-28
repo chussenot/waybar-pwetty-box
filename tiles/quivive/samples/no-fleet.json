@@ -1,11 +1,18 @@
 {
   "v": 1,
+  "at": "2026-08-28T09:00:00Z",
   "status": "no-fleet",
   "repos": [
     {
       "name": "scratch",
+      "path": "/home/user/repos/scratch",
       "status": "no-fleet",
-      "agents": { "active": 0, "idle": 0, "stale": 0, "dead": 0 },
+      "agents": {
+        "active": 0,
+        "idle": 0,
+        "stale": 0,
+        "dead": 0
+      },
       "attention": []
     }
   ]
