@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "status": "no-fleet",
+  "repos": [
+    {
+      "name": "scratch",
+      "status": "no-fleet",
+      "agents": { "active": 0, "idle": 0, "stale": 0, "dead": 0 },
+      "attention": []
+    }
+  ]
+}

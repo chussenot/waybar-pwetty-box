@@ -1,0 +1,24 @@
+{
+  "v": 1,
+  "status": "active",
+  "repos": [
+    {
+      "name": "quivive",
+      "status": "active",
+      "agents": { "active": 2, "idle": 1, "stale": 0, "dead": 0 },
+      "attention": []
+    },
+    {
+      "name": "pact",
+      "status": "drained",
+      "agents": { "active": 0, "idle": 0, "stale": 0, "dead": 0 },
+      "attention": []
+    },
+    {
+      "name": "recount",
+      "status": "all-quiet",
+      "agents": { "active": 0, "idle": 0, "stale": 0, "dead": 0 },
+      "attention": []
+    }
+  ]
+}

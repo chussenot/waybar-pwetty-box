@@ -63,8 +63,41 @@ const EMPTY: TilePreset = TilePreset {
     ],
 };
 
+macro_rules! quivive_dir {
+    ($p:literal) => {
+        concat!("../../tiles/quivive/", $p)
+    };
+}
+
+/// Fleet-presence status bar for the repositories quivive watches.
+const QUIVIVE: TilePreset = TilePreset {
+    name: "quivive",
+    config: include_str!(quivive_dir!("tile.json")),
+    schema: include_str!(quivive_dir!("schema.json")),
+    doc: include_str!(quivive_dir!("README.md")),
+    samples: &[
+        (
+            "all-quiet",
+            include_str!(quivive_dir!("samples/all-quiet.json")),
+        ),
+        ("active", include_str!(quivive_dir!("samples/active.json"))),
+        (
+            "human-needed",
+            include_str!(quivive_dir!("samples/human-needed.json")),
+        ),
+        (
+            "drained",
+            include_str!(quivive_dir!("samples/drained.json")),
+        ),
+        (
+            "no-fleet",
+            include_str!(quivive_dir!("samples/no-fleet.json")),
+        ),
+    ],
+};
+
 /// All bundled presets.
-const PRESETS: &[TilePreset] = &[CLAUDE, EMPTY];
+const PRESETS: &[TilePreset] = &[CLAUDE, EMPTY, QUIVIVE];
 
 /// Look up a bundled preset by name.
 pub fn get(name: &str) -> Option<&'static TilePreset> {
@@ -99,6 +132,23 @@ mod tests {
         serde_json::from_str::<serde_json::Value>(p.config).expect("config is JSON");
         serde_json::from_str::<serde_json::Value>(p.schema).expect("schema is JSON");
         assert_eq!(p.samples.len(), 2);
+    }
+
+    #[test]
+    fn quivive_preset_is_registered_and_well_formed() {
+        let p = get("quivive").expect("quivive preset present");
+        serde_json::from_str::<serde_json::Value>(p.config).expect("config is JSON");
+        serde_json::from_str::<serde_json::Value>(p.schema).expect("schema is JSON");
+        assert_eq!(p.samples.len(), 5);
+        let names: Vec<&str> = p.samples.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            names,
+            ["all-quiet", "active", "human-needed", "drained", "no-fleet"]
+        );
+        for (name, json) in p.samples {
+            serde_json::from_str::<serde_json::Value>(json)
+                .unwrap_or_else(|e| panic!("sample {name} is JSON: {e}"));
+        }
     }
 
     #[test]

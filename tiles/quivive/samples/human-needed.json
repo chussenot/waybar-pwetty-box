@@ -1,0 +1,36 @@
+{
+  "v": 1,
+  "status": "human-needed",
+  "repos": [
+    {
+      "name": "quivive",
+      "status": "human-needed",
+      "agents": { "active": 1, "idle": 0, "stale": 1, "dead": 1 },
+      "attention": [
+        {
+          "kind": "dead_holding_paths",
+          "agent": "agent-6",
+          "paths": ["src/fold.rs", "src/state.rs"],
+          "remaining_ttl": 0
+        },
+        {
+          "kind": "needs_decision",
+          "bead_id": "quivive-15r"
+        },
+        {
+          "kind": "gate_order_violation",
+          "started_id": "quivive-eea",
+          "started_wave": 3,
+          "open_gate_id": "quivive-ykn",
+          "gate_wave": 2
+        }
+      ]
+    },
+    {
+      "name": "pact",
+      "status": "active",
+      "agents": { "active": 1, "idle": 0, "stale": 0, "dead": 0 },
+      "attention": []
+    }
+  ]
+}
