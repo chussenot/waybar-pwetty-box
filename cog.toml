@@ -1,0 +1,47 @@
+# cocogitto — conventional commits, versions and the generated changelog.
+#
+# Adopted from the commit that added this file forward, NOT from day one: this
+# repository predates the convention by about a hundred commits that will never
+# follow it. Two settings make that safe together, and neither works alone:
+#
+#   from_latest_tag = true   cog reads only commits after the most recent tag
+#   the v0.1.0 baseline tag  placed on the last pre-convention commit
+#
+# Cut the tag before the first conventional commit, never after — a tag placed
+# later leaves ungoverned commits inside the range cog reads, and `cog check`
+# then fails on history nobody can rewrite. See docs/versioning.md.
+from_latest_tag = true
+
+# The history carries `Merge branch '...'` commits from topic branches and will
+# keep doing so. They are not conventional commits and are not meant to be.
+ignore_merge_commits = true
+ignore_fixup_commits = true
+
+tag_prefix = "v"
+
+# No `scopes` allowlist, deliberately. The house rule is that every commit
+# carries a scope, which cog cannot express: its `scopes` setting rejects a
+# scope outside the list but says nothing about a commit with no scope at all.
+# So CI asserts scope *presence* over the PR range instead, and the set of
+# scope names stays open — a new area of the tree should not need a config
+# change before its first commit can land.
+
+[changelog]
+path = "CHANGELOG.md"
+template = "remote"
+remote = "github.com"
+owner = "chussenot"
+repository = "waybar-pwetty-box"
+
+# Everything a change has to pass, before a version claims it passed. The
+# version lands in Cargo.toml in the same commit cog creates, so a tag never
+# points at a tree whose manifest disagrees with it.
+#
+# The sed is anchored at line start: `version = ` appears only under [package]
+# (dependency versions are inline, `khronos-egl = { version = "6", ... }`), and
+# `0,/re/` stops at the first match regardless.
+pre_bump_hooks = [
+  "mise run check",
+  "sed -i '0,/^version = /s//version = \"{{version}}\"/' Cargo.toml",
+  "cargo check --quiet",
+]
