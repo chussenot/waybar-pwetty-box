@@ -26,22 +26,31 @@ tag_prefix = "v"
 # scope names stays open — a new area of the tree should not need a config
 # change before its first commit can land.
 
-[changelog]
-path = "CHANGELOG.md"
-template = "remote"
-remote = "github.com"
-owner = "chussenot"
-repository = "waybar-pwetty-box"
-
 # Everything a change has to pass, before a version claims it passed. The
 # version lands in Cargo.toml in the same commit cog creates, so a tag never
 # points at a tree whose manifest disagrees with it.
 #
 # The sed is anchored at line start: `version = ` appears only under [package]
 # (dependency versions are inline, `khronos-egl = { version = "6", ... }`), and
-# `0,/re/` stops at the first match regardless.
+# the `0,/re/` address stops at the first match regardless. The replacement
+# rewrites the WHOLE line — an empty `s//…/` would reuse the address regex and
+# replace only the matched `version = `, leaving the old quoted version behind
+# as `version = "0.1.1""0.1.0"`. `cargo check` afterwards is what catches that
+# class of mistake before the bump commit is written.
+#
+# Keep this above [changelog]: these are top-level settings, and TOML would read
+# a key written after a table header as belonging to that table. cog rejects it
+# with `unknown field pre_bump_hooks` on every command, which is a confusing way
+# to be told where a line sits.
 pre_bump_hooks = [
   "mise run check",
-  "sed -i '0,/^version = /s//version = \"{{version}}\"/' Cargo.toml",
+  "sed -i '0,/^version = /s/^version = .*/version = \"{{version}}\"/' Cargo.toml",
   "cargo check --quiet",
 ]
+
+[changelog]
+path = "CHANGELOG.md"
+template = "remote"
+remote = "github.com"
+owner = "chussenot"
+repository = "waybar-pwetty-box"
