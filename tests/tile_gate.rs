@@ -140,6 +140,105 @@ fn every_sample_file_is_registered() {
 }
 
 // ---------------------------------------------------------------------------
+// Schema validation
+// ---------------------------------------------------------------------------
+
+/// Compile a preset's schema, or panic saying which one failed.
+fn compile(name: &str, schema_src: &str) -> (boon::Schemas, boon::SchemaIndex) {
+    let schema: serde_json::Value =
+        serde_json::from_str(schema_src).expect("schema parses as JSON");
+    let mut schemas = boon::Schemas::new();
+    let mut compiler = boon::Compiler::new();
+    let url = format!("mem:{name}.json");
+    compiler
+        .add_resource(&url, schema)
+        .unwrap_or_else(|e| panic!("{name}: schema is not a usable resource: {e}"));
+    let sref = compiler
+        .compile(&url, &mut schemas)
+        .unwrap_or_else(|e| panic!("{name}: schema does not compile: {e}"));
+    (schemas, sref)
+}
+
+/// Every bundled sample satisfies its own preset's schema.
+///
+/// `pwetty check` only ever proved a sample *renders*. Nothing checked it
+/// against the contract it is meant to illustrate, so a sample could drift from
+/// the documented shape — or the schema could forbid a shape we actually ship —
+/// and the gate would stay green. The samples are the contract's worked
+/// examples; the two have to agree.
+#[test]
+fn every_sample_validates_against_its_schema() {
+    for p in tiles::all() {
+        let (schemas, sref) = compile(p.name, p.schema);
+        for (name, json) in p.samples {
+            let data: serde_json::Value = serde_json::from_str(json).expect("sample is JSON");
+            if let Err(e) = schemas.validate(&data, sref) {
+                panic!("{}: sample '{name}' violates its schema.json:\n{e}", p.name);
+            }
+        }
+    }
+}
+
+/// The flip side, and the reason the test above is not enough on its own.
+///
+/// The additive rule pushes every schema toward permissiveness
+/// (`additionalProperties: true`, `required` kept minimal), and a schema that
+/// has drifted all the way to accepting anything would pass
+/// `every_sample_validates_against_its_schema` while documenting nothing. These
+/// are payloads the contract says are wrong; if one starts validating, the
+/// schema has stopped being a contract.
+#[test]
+fn claude_schema_rejects_malformed_payloads() {
+    let p = tiles::get("claude").expect("claude preset present");
+    let (schemas, sref) = compile(p.name, p.schema);
+
+    let bad = [
+        (
+            "no shortcut",
+            serde_json::json!({ "sessions": [{ "state": "working" }] }),
+        ),
+        // The if/else: a Claude desktop needs sessions, a window needs app+icon.
+        ("claude desktop with no sessions", serde_json::json!({ "shortcut": 1 })),
+        (
+            "window with no app",
+            serde_json::json!({ "shortcut": 1, "is_claude": false }),
+        ),
+        (
+            "empty sessions",
+            serde_json::json!({ "shortcut": 1, "sessions": [] }),
+        ),
+        (
+            "three sessions",
+            serde_json::json!({ "shortcut": 1, "sessions": [
+                { "state": "working" }, { "state": "idle" }, { "state": "shell" }
+            ]}),
+        ),
+        (
+            "unknown session state",
+            serde_json::json!({ "shortcut": 1, "sessions": [{ "state": "brewing" }] }),
+        ),
+        (
+            "idle_level past the fade table",
+            serde_json::json!({ "shortcut": 1, "sessions": [
+                { "state": "idle", "idle_level": 9 }
+            ]}),
+        ),
+    ];
+
+    let mut accepted = Vec::new();
+    for (label, data) in &bad {
+        if schemas.validate(data, sref).is_ok() {
+            accepted.push(*label);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "claude schema.json accepts payloads the contract calls malformed: {accepted:?} \
+         — a schema that accepts everything documents nothing"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Cross-repo golden sync
 // ---------------------------------------------------------------------------
 

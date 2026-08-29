@@ -34,11 +34,10 @@ Rows are added by the change that defers, not retrospectively.
 | 1 | **User-supplied per-span shaders** — `<shader src='…'>` alongside `<glow>` | `EFFECT_TAGS` in `lib.rs`; `ShaderCache` keys by source, so a second span shader is a registration, not a subsystem | A tile needs a per-span effect `<glow>` cannot express, *and* the effect is wanted by a second tile. One tile's one-off is a built-in, not a plugin surface. |
 | 2 | **`<bar>` / `<ring>` / `<sparkline>` inline embeds** | `markup::Embed` → measured placement → `draw_flow`; `<wrap>`/`<tickerbox>`/`<status>` all ride it | A producer emits a numeric series (or a bounded ratio) that a tile currently renders as digits, and the digits are demonstrably harder to read at a glance in a rendered PNG. |
 | 3 | **Mixing inline embeds with `<box>`/`<glow>` span effects in one tile** | Both paths exist; only their composition is untested | A tile design needs both. Cost when it fires: `draw_flow` and `span_rect` currently answer different questions about position, and reconciling them is the actual work — budget it, don't discover it. |
-| 4 | **Validating samples against the JSON Schema in `pwetty check`** | `check` already loads both; it compares template variables to schema properties and renders every sample | A payload that satisfies the template but violates the schema reaches a tile — a wrong `type`, a missing `required` field the template tolerates via `default()`. Cost when it fires: a JSON Schema crate as a dependency of the CLI, which is why it has not been paid yet. |
-| 5 | **Antithesis instrumentation in the code** | `antithesis/scratchbook/` catalogues ~60 properties and their assertions; `existing-assertions.md` records that the codebase has none | An Antithesis run is actually commissioned. Until then the catalogue is a design artifact — see [the study](../studies/antithesis-property-sweep.md). |
-| 6 | **Vendoring or submoduling the producer repos whose goldens we copy** | `tests/tile_gate.rs` compares against a sibling checkout and skips loudly when absent | The loud skip stops being loud enough: a drift between a tile's `samples/` and a producer's goldens ships to a user. Cost when it fires: this repo's test suite starts depending on another repo's layout. |
-| 7 | **Installing the `.so` to a versioned or prefixed path** | `mise run install`; `module_path` points straight at `target/release` | Someone needs two builds of the module resident at once (an A/B of a render change on one bar). See [ADR-0002](0002-install-restart-contract.md) for why the copy was not worth it for the single-build case. |
-| 8 | **A `[tools]` toolchain pin in `mise.toml`** | `rust-toolchain.toml` pins 1.92 and rustup honours it on the first `cargo` call | Never, unless `rust-toolchain.toml` stops being honoured. Two files that can disagree about the toolchain is the exact failure the pin exists to prevent. Recorded here so the next person does not add it as an obvious improvement. |
+| 4 | **Antithesis instrumentation in the code** | `antithesis/scratchbook/` catalogues ~60 properties and their assertions; `existing-assertions.md` records that the codebase has none | An Antithesis run is actually commissioned. Until then the catalogue is a design artifact — see [the study](../studies/antithesis-property-sweep.md). |
+| 5 | **Vendoring or submoduling the producer repos whose goldens we copy** | `tests/tile_gate.rs` compares against a sibling checkout and skips loudly when absent | The loud skip stops being loud enough: a drift between a tile's `samples/` and a producer's goldens ships to a user. Cost when it fires: this repo's test suite starts depending on another repo's layout. |
+| 6 | **Installing the `.so` to a versioned or prefixed path** | `mise run install`; `module_path` points straight at `target/release` | Someone needs two builds of the module resident at once (an A/B of a render change on one bar). See [ADR-0002](0002-install-restart-contract.md) for why the copy was not worth it for the single-build case. |
+| 7 | **A `[tools]` toolchain pin in `mise.toml`** | `rust-toolchain.toml` pins 1.92 and rustup honours it on the first `cargo` call | Never, unless `rust-toolchain.toml` stops being honoured. Two files that can disagree about the toolchain is the exact failure the pin exists to prevent. Recorded here so the next person does not add it as an obvious improvement. |
 
 ## Alternatives, priced
 
@@ -56,8 +55,8 @@ for the tree. Not rejected — complementary. A row here may also be a bead; the
 row is the one that survives.
 
 **Just build the deferred things.**
-Cost: rows 1, 2 and 4 are each a day or two, and all three would be built against
-no user. Row 4 additionally buys a dependency. The register exists precisely so
+Cost: rows 1 and 2 are each a day or two, and both would be built against no
+user. The register exists precisely so
 that "we could just do it" is a decision with a stated trigger rather than a
 mood. Rejected.
 
@@ -65,6 +64,10 @@ mood. Rejected.
 
 - Removing a row is part of the commit that implements it. A row that outlives
   its feature is a documentation bug the `docs` gate cannot catch — reviewers can.
+- **Cite a row by its name, never its number.** Removing a row renumbers every
+  row below it, and the `docs` gate checks that a link resolves, not that it
+  still points at what the prose claims. Two references rotted this way the
+  first time a trigger fired.
 - A trigger phrased as "when we need it" is not a trigger and should not be
   merged. Every row above names an observation someone could actually make.
 - This ADR will be edited far more often than the other two. That is the point;

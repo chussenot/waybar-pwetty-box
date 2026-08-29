@@ -51,6 +51,10 @@ name = "pwetty"
 path = "src/bin/pwetty.rs"
 
 [dev-dependencies]
+# JSON Schema validation for the tile gate: `pwetty check` proves a sample
+# renders, not that it satisfies the contract it is meant to illustrate. Kept a
+# dev-dependency deliberately — it never reaches the shipped .so.
+boon = "0.6"
 image = "0.25"
 
 [profile.release]

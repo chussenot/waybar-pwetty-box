@@ -1,7 +1,7 @@
 ---
 title: "Study: what the Antithesis property sweep actually produced"
 status: active
-date: 2026-08-29
+date: 2026-08-30
 ---
 
 # Study: what the Antithesis property sweep actually produced
@@ -57,7 +57,8 @@ No `antithesis_sdk` dependency, no `assert_always!`/`assert_sometimes!` calls,
 no `ANTITHESIS_*` environment handling. Instrumenting ~51 properties for a
 campaign nobody has commissioned would add a dependency and a few hundred
 assertion sites to a bar module, in exchange for nothing until a run is bought.
-That is [deferral row 6](../adr/0003-yagni-deferral-register.md), and its
+That is the **Antithesis instrumentation** row in
+[the deferral register](../adr/0003-yagni-deferral-register.md), and its
 reversal trigger is exactly "a run is commissioned".
 
 The scratchbook also holds about fourteen `(needs human input)` design-intent

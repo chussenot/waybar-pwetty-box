@@ -1,7 +1,7 @@
 ---
 title: "Study: the quivive tile, and where the byte-sync rule came from"
 status: active
-date: 2026-08-29
+date: 2026-08-30
 ---
 
 # Study: the quivive tile, and where the byte-sync rule came from
@@ -97,9 +97,23 @@ the three was found by running the tile — it rendered correctly throughout. Th
 were found by comparing the tile against the producer's own artifacts, which is
 the activity the tile gate now automates.
 
-## What still is not covered
+## The gap this study left, and how it closed
 
-`pwetty check` does not validate samples *against* the schema — it checks
-template-vs-schema and renders every sample, so a sample with a wrong type slips
-through if the template tolerates it. That is
-[deferral row 4](../adr/0003-yagni-deferral-register.md), with its trigger.
+When this study was written, `pwetty check` still did not validate samples
+*against* the schema — it checked template-vs-schema and rendered every sample,
+so a sample with a wrong type slipped through if the template tolerated it. It
+was a row in [the deferral register](../adr/0003-yagni-deferral-register.md),
+waiting for a payload to actually violate a schema.
+
+It closed from an unexpected direction. A fork of this repository
+([mrzor](https://github.com/mrzor/waybar-pwetty-box)) hit the same gap from the
+other end — reworking the `claude` contract, and wanting to know its new schema
+still *meant* something — and wrote both halves: every sample validated against
+its own schema, and the schema fed counterexamples so it cannot rot into
+accepting anything. Both now live in `tests/tile_gate.rs`.
+
+The second half is the one this study would not have predicted. Everything above
+is about a schema being too strict (`additionalProperties: false` rejecting an
+additive change). The additive rule fixes that by pushing schemas toward
+permissiveness — and nothing was watching the other end of that push, where a
+schema accepts everything and documents nothing.
