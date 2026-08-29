@@ -1,0 +1,110 @@
+name: CI
+
+# Two jobs, and only two:
+#
+#   check    installs the system packages `mise run deps:list-ci` prints, then
+#            runs `mise run check` — the same command a contributor runs. A CI
+#            that runs a different script is a CI whose failures you cannot
+#            reproduce, so the workflow deliberately holds no build knowledge
+#            of its own beyond "install the deps, run the task".
+#   commits  pull requests only: conventional-commit rules over the PR range.
+#
+# Every action is pinned by commit SHA, with the tag in a trailing comment for
+# humans; dependabot moves both. Pinning cocogitto/cocogitto-action also pins
+# the `cog` binary, which the action carries in its own version.env — see
+# docs/versioning.md for why that matters.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: mise run check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # mise.toml carries no [tools] — rust-toolchain.toml owns the
+          # compiler pin, and two files that can disagree about the toolchain
+          # is the failure that pin exists to prevent.
+          install: true
+          cache: true
+
+      - name: System packages
+        # The list comes from scripts/apt-packages.txt via the task, not from
+        # this file: a workflow that spells the packages out is a second copy
+        # that drifts from what `mise run deps` checks for.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $(mise run deps:list-ci)
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - run: mise run check
+
+      - name: Upload rendered tiles
+        # A paint regression should be visible, not just red. Uploaded on
+        # failure too — a tile that renders wrong is exactly the case where you
+        # want the PNGs.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rendered-tiles
+          path: target/render/
+          if-no-files-found: warn
+
+  commits:
+    name: conventional commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: cocogitto/cocogitto-action@52d0023b4396897f1815648e553db2ab8d782f3a # v4.2.0
+        with:
+          install-only: true
+
+      - name: cog check (PR range only)
+        # The range is explicit rather than relying on from_latest_tag: the
+        # baseline tag makes a full walk safe in principle, but a CI checkout's
+        # tags are whatever the fetch happened to bring, and a gate should not
+        # depend on that.
+        run: cog check ${{ github.event.pull_request.base.sha }}..${{ github.sha }}
+
+      - name: every commit carries a scope
+        # cog cannot express this: its `scopes` setting rejects a scope outside
+        # an allowlist, but says nothing about a commit with no scope at all.
+        # Merge commits are skipped, matching cog.toml's ignore_merge_commits.
+        run: |
+          set -eu
+          fail=0
+          range='${{ github.event.pull_request.base.sha }}..${{ github.sha }}'
+          while IFS= read -r line; do
+            sha=${line%% *}
+            subject=${line#* }
+            # Everything before the first colon: `fix(cli)`, `feat(tiles)!`.
+            prefix=${subject%%:*}
+            case $prefix in
+              *'('*')' | *'('*')!') ;;
+              *) echo "::error::$sha: subject has no scope — '$subject'"; fail=1 ;;
+            esac
+          done < <(git log --no-merges --format='%H %s' "$range")
+          if [ "$fail" != 0 ]; then
+            echo "conventional commits here take a scope, e.g. fix(cli): …" >&2
+            exit 1
+          fi
+          echo "every commit in $range carries a scope"

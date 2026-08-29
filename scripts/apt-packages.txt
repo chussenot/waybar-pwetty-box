@@ -1,0 +1,18 @@
+# System packages, Debian/Ubuntu names. The single source for both
+# `mise run deps` (which checks them and prints this list on failure) and CI
+# (which installs the `check` subset). Add a package here, not in two places.
+#
+# Columns: <package> <scope> # <why>
+#   scope `check`    needed to build, test and render — CI installs these
+#   scope `install`  needed only for `mise run install`/`restart` on a real bar
+#
+# resvg, femtovg and minijinja are pure Rust and need nothing here.
+
+libgtk-3-dev      check    # gtk+-3.0: waybar-cffi binds gtk-rs 0.18 (GTK3)
+libegl-dev        check    # egl: our own surfaceless context (khronos-egl, static)
+libepoxy-dev      check    # epoxy: GL entry points, resolved from waybar's own libepoxy
+pkg-config        check    # what the -sys crates themselves ask for
+libgl1-mesa-dri   check    # llvmpipe: the software GL the headless render path runs on
+waybar            install  # the host that dlopens the module
+psmisc            install  # killall, for the restart task
+util-linux        install  # setsid, to relaunch the bar detached
