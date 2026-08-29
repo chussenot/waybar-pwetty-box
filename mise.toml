@@ -12,22 +12,37 @@ description = "Check the system libraries and binaries a build + install needs"
 # nobody asked for, and this list is Debian/Ubuntu-shaped while the build is not.
 # pkg-config is the honest question — it is what the -sys crates themselves ask.
 # resvg, femtovg and minijinja are pure Rust and need nothing here.
+#
+# The package names it suggests come from scripts/apt-packages.txt rather than
+# being spelled out here, because CI installs from that same file: a hint that
+# can drift from what CI actually installs is a hint that will.
 run = """
 set -eu
 missing=""
 for pkg in gtk+-3.0 pangocairo egl epoxy; do
   pkg-config --exists "$pkg" || missing="$missing $pkg"
 done
-for bin in waybar killall setsid; do
+for bin in waybar killall setsid python3; do
   command -v "$bin" >/dev/null 2>&1 || missing="$missing $bin"
 done
 if [ -n "$missing" ]; then
   echo "missing:$missing" >&2
-  echo "on debian/ubuntu: sudo apt install libgtk-3-dev libegl-dev libepoxy-dev pkg-config waybar psmisc util-linux" >&2
+  echo "on debian/ubuntu: sudo apt install $(mise run deps:list | tr '\\n' ' ')" >&2
   exit 1
 fi
 echo "deps ok: $(pkg-config --modversion gtk+-3.0) gtk3, $(pkg-config --modversion egl) egl, waybar $(waybar --version 2>/dev/null | head -1)"
 """
+
+[tasks."deps:list"]
+description = "Print every Debian/Ubuntu package name a build + install needs"
+run = "awk '!/^#/ && NF { print $1 }' scripts/apt-packages.txt"
+
+[tasks."deps:list-ci"]
+description = "Print the package names CI needs (build, test, render — no live bar)"
+# CI never starts a bar, so it does not need waybar/psmisc/util-linux. It does
+# need the software GL the render leg runs on, which is why that package is in
+# the same file rather than pasted into the workflow.
+run = "awk '!/^#/ && $2 == \"check\" { print $1 }' scripts/apt-packages.txt"
 
 [tasks.build]
 description = "Build the release .so waybar loads (and the pwetty CLI)"
@@ -82,6 +97,25 @@ description = "Validate every bundled tile: template <-> schema <-> samples"
 # checks the tree you are editing rather than whatever was installed last.
 run = "cargo run --quiet --release --bin pwetty -- check"
 
+[tasks.render]
+description = "Render every sample of every bundled tile headless, to PNG"
+# The leg that catches a tile which type-checks and paints nothing: `tiles`
+# proves the template binds and the markup parses, this proves pixels come out.
+# Surfaceless EGL on llvmpipe — no display, no seat, no DRM master — which is
+# also exactly why CI can run it. The env is set here rather than left to the
+# caller so the local run and the CI run are the same run.
+env = { EGL_PLATFORM = "surfaceless", LIBGL_ALWAYS_SOFTWARE = "1", GALLIUM_DRIVER = "llvmpipe" }
+run = """
+set -eu
+out="${PWETTY_RENDER_OUT:-target/render}"
+rm -rf "$out"
+mkdir -p "$out"
+for tile in $(cargo run --quiet --release --bin pwetty -- list | awk '/samples:/ { next } /^  [a-z]/ { print $1 }'); do
+  cargo run --quiet --release --bin pwetty -- render "$tile" --all-states -o "$out"
+done
+echo "rendered $(find "$out" -name '*.png' | wc -l) png(s) into $out"
+"""
+
 [tasks.test]
 description = "Run the test suite"
 run = "cargo test"
@@ -107,13 +141,17 @@ description = "Run clippy with warnings denied, over all targets"
 run = "cargo clippy --all-targets -- -D warnings"
 
 [tasks.check]
-description = "Everything a change has to pass: lint, tests, tiles"
+description = "Everything a change has to pass: lint, tests, tiles, render"
 # Sequential rather than `depends`, which runs in parallel: these legs share one
 # target/ directory and one release binary, and a lint rebuilding under a test
 # run is a race with a confusing failure. No `restart` leg — a check that kills
 # your bar is one you stop running.
+#
+# This is the whole of CI too: the workflow installs system packages and then
+# invokes this task, so a CI failure reproduces locally by name.
 run = [
   "mise run lint",
   "mise run test",
   "mise run tiles",
+  "mise run render",
 ]
