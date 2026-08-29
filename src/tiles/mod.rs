@@ -42,6 +42,11 @@ const CLAUDE: TilePreset = TilePreset {
         ("duo", include_str!(tile_dir!("samples/duo.json"))),
         ("window", include_str!(tile_dir!("samples/window.json"))),
         ("empty", include_str!(tile_dir!("samples/empty.json"))),
+        ("mixed", include_str!(tile_dir!("samples/mixed.json"))),
+        (
+            "duo-window",
+            include_str!(tile_dir!("samples/duo-window.json")),
+        ),
     ],
 };
 
@@ -119,7 +124,7 @@ mod tests {
         // Config and schema are valid JSON.
         serde_json::from_str::<serde_json::Value>(p.config).expect("config is JSON");
         serde_json::from_str::<serde_json::Value>(p.schema).expect("schema is JSON");
-        assert_eq!(p.samples.len(), 7);
+        assert_eq!(p.samples.len(), 9);
         for (name, json) in p.samples {
             serde_json::from_str::<serde_json::Value>(json)
                 .unwrap_or_else(|e| panic!("sample {name} is JSON: {e}"));

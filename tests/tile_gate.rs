@@ -197,8 +197,11 @@ fn claude_schema_rejects_malformed_payloads() {
             "no shortcut",
             serde_json::json!({ "sessions": [{ "state": "working" }] }),
         ),
-        // The if/else: a Claude desktop needs sessions, a window needs app+icon.
-        ("claude desktop with no sessions", serde_json::json!({ "shortcut": 1 })),
+        // The anyOf: a payload has to be one of items / sessions / flat app.
+        (
+            "claude desktop with no sessions",
+            serde_json::json!({ "shortcut": 1 }),
+        ),
         (
             "window with no app",
             serde_json::json!({ "shortcut": 1, "is_claude": false }),
@@ -221,6 +224,33 @@ fn claude_schema_rejects_malformed_payloads() {
             "idle_level past the fade table",
             serde_json::json!({ "shortcut": 1, "sessions": [
                 { "state": "idle", "idle_level": 9 }
+            ]}),
+        ),
+        // The items[] shapes. `anyOf` over two row kinds is the part most able
+        // to rot into "accepts anything", so each way of being neither a
+        // session nor an app is named here.
+        (
+            "empty items",
+            serde_json::json!({ "shortcut": 1, "items": [] }),
+        ),
+        (
+            "three rows",
+            serde_json::json!({ "shortcut": 1, "items": [
+                { "state": "working" }, { "state": "idle" }, { "app": "Firefox" }
+            ]}),
+        ),
+        (
+            "a row that is neither a session nor an app",
+            serde_json::json!({ "shortcut": 1, "items": [{ "folder": "api" }] }),
+        ),
+        (
+            "an app row with no app",
+            serde_json::json!({ "shortcut": 1, "items": [{ "kind": "app", "app_icon": "code" }] }),
+        ),
+        (
+            "a session row with an unknown state",
+            serde_json::json!({ "shortcut": 1, "items": [
+                { "kind": "session", "state": "brewing" }
             ]}),
         ),
     ];

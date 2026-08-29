@@ -1,0 +1,8 @@
+{
+  "shortcut": 4,
+  "active": true,
+  "items": [
+    { "kind": "session", "state": "working", "folder": "pwetty-box", "title": "port items[] from the fork", "unpushed": 2 },
+    { "kind": "app", "app": "Firefox", "app_icon": "app", "title": "waybar-pwetty-box — pull request #1" }
+  ]
+}

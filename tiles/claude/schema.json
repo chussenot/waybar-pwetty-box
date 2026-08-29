@@ -2,31 +2,91 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "pwetty:tile/claude",
   "title": "claude tile data",
-  "description": "Data for the bundled `claude` tile: one niri desktop. The tile is DATA-DRIVEN — waybar always references `claude`, and the template renders by what you send: a `sessions` array (1 → single layout, 2 → stacked dual layout with a shared shortcut gutter), or an ordinary window (`is_claude:false` → app icon + name). Feed it as the module's `exec` stdout (JSON) or static `text`. Each property notes REAL (from the claude-status-db daemon) vs MOCK (synthesize it).",
+  "description": "Data for the bundled `claude` tile: one niri desktop, as a list of at most two ROWS. The tile is DATA-DRIVEN — waybar always references `claude`, and the template renders by what you send: one row → the rich single layout, two rows → the stacked dual layout with a shared shortcut gutter. Each row is either a Claude session (status indicator + folder + ↑unpushed) or an ordinary window (app icon + name); a desktop may hold one of each. Feed it as the module's `exec` stdout (JSON) or static `text`. Each property notes REAL (from the claude-status-db daemon) vs MOCK (synthesize it).",
   "type": "object",
   "required": ["shortcut"],
   "additionalProperties": true,
-  "allOf": [
+  "anyOf": [
     {
-      "comment": "A Claude desktop carries sessions[]; an ordinary window carries app/app_icon instead.",
-      "if": {
-        "required": ["is_claude"],
-        "properties": { "is_claude": { "const": false } }
-      },
-      "then": {
-        "comment": "Window layout: the leftmost window's icon + label.",
-        "required": ["app_icon", "app"]
-      },
-      "else": {
-        "comment": "Claude layout: one or two sessions on this desktop.",
-        "required": ["sessions"]
-      }
+      "$comment": "The contract: one rows array, whatever each row is.",
+      "required": ["items"]
+    },
+    {
+      "$comment": "Legacy: a Claude-only desktop sent as sessions[].",
+      "required": ["sessions"]
+    },
+    {
+      "$comment": "Legacy: a single ordinary window sent as flat fields.",
+      "required": ["app", "app_icon"]
     }
   ],
+  "definitions": {
+    "sessionRow": {
+      "type": "object",
+      "required": ["state"],
+      "additionalProperties": true,
+      "description": "A Claude session on this desktop.",
+      "properties": {
+        "kind": { "const": "session" },
+        "state": {
+          "type": "string",
+          "enum": ["working", "prompt", "idle", "shell", "empty"],
+          "description": "REAL (sessions.state). Drives this row's indicator: working=Claude mascot deep-orange, prompt=blinking '?' (and the WHOLE tile pulses if ANY row is prompt), idle=fade bar (see idle_level) + idle_ago, shell=mascot electric-cyan, empty=no indicator, just the bare shortcut (desktop has no session and no window — the producer's absent-desktop placeholder)."
+        },
+        "idle_level": {
+          "type": "integer", "minimum": 0, "maximum": 6, "default": 0,
+          "description": "REAL-derived. Only when state=idle: 0=just idled (bright) .. 6=>60min (dim)."
+        },
+        "idle_ago": {
+          "type": "string",
+          "description": "REAL-derived. When state=idle: time since active (e.g. '12m'), beside the bar. Keep it short.",
+          "examples": ["12m", "2h"]
+        },
+        "folder": {
+          "type": "string",
+          "description": "REAL (basename of sessions.cwd).",
+          "examples": ["api", "worker"]
+        },
+        "title": {
+          "type": "string",
+          "description": "MOCK. The session window title. Wrapped (one row) or tickered (two rows).",
+          "examples": ["refactor the inline flow layout"]
+        },
+        "unpushed": {
+          "type": "integer", "minimum": 0,
+          "description": "MOCK. Unpushed commit count; shown as ↑N after the folder (hidden when 0 or idle)."
+        }
+      }
+    },
+    "appRow": {
+      "type": "object",
+      "required": ["app"],
+      "additionalProperties": true,
+      "description": "An ordinary window on this desktop.",
+      "properties": {
+        "kind": { "const": "app" },
+        "app": {
+          "type": "string",
+          "description": "The app/window label.",
+          "examples": ["Firefox", "VS Code"]
+        },
+        "app_icon": {
+          "type": "string",
+          "description": "A bundled icon name (e.g. 'code') or an absolute path to an .svg. Omitted → the generic 'app' glyph.",
+          "examples": ["code", "/usr/share/icons/hicolor/scalable/apps/firefox.svg"]
+        },
+        "title": {
+          "type": "string",
+          "description": "The window title (wrapped when it is the only row, tickered when there are two).",
+          "examples": ["lib.rs — pwetty-box — Visual Studio Code"]
+        }
+      }
+    }
+  },
   "properties": {
     "shortcut": {
       "type": ["integer", "string"],
-      "description": "MOCK. The niri desktop's shortcut number, shown first (big, in a shared left gutter when two sessions).",
+      "description": "MOCK. The niri desktop's shortcut number, shown first (big, in a shared left gutter when there are two rows).",
       "examples": [5]
     },
     "active": {
@@ -34,66 +94,43 @@
       "default": false,
       "description": "Whether this is the focused/active niri desktop → the accent 'card'."
     },
-    "is_claude": {
-      "type": "boolean",
-      "default": true,
-      "description": "true (or omitted) → a Claude desktop (uses `sessions`); false → an ordinary window (uses `app`/`app_icon`)."
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "description": "The desktop's rows, in display order: at most two, each a Claude session or an ordinary window, in any combination. Send what is on the desktop; the tile adapts — you never pick the layout, the data does.",
+      "items": {
+        "anyOf": [
+          { "$ref": "#/definitions/sessionRow" },
+          { "$ref": "#/definitions/appRow" }
+        ]
+      }
     },
     "sessions": {
       "type": "array",
       "minItems": 1,
       "maxItems": 2,
-      "description": "The Claude session(s) on this desktop (1 → single layout, 2 → stacked dual layout). Send the desktop's sessions; the tile adapts — you never pick the layout, the data does.",
-      "items": {
-        "type": "object",
-        "required": ["state"],
-        "additionalProperties": true,
-        "properties": {
-          "state": {
-            "type": "string",
-            "enum": ["working", "prompt", "idle", "shell", "empty"],
-            "description": "REAL (sessions.state). Drives this session's indicator: working=Claude mascot deep-orange, prompt=blinking '?' (and the WHOLE tile pulses if ANY session is prompt), idle=fade bar (see idle_level) + idle_ago, shell=mascot electric-cyan, empty=no indicator, just the bare shortcut (desktop has no session or window — the producer's absent-desktop placeholder)."
-          },
-          "idle_level": {
-            "type": "integer", "minimum": 0, "maximum": 6, "default": 0,
-            "description": "REAL-derived. Only when state=idle: 0=just idled (bright) .. 6=>60min (dim)."
-          },
-          "idle_ago": {
-            "type": "string",
-            "description": "REAL-derived. When state=idle: time since active (e.g. '12m'), beside the bar. Keep it short.",
-            "examples": ["12m", "2h"]
-          },
-          "folder": {
-            "type": "string",
-            "description": "REAL (basename of sessions.cwd).",
-            "examples": ["api", "worker"]
-          },
-          "title": {
-            "type": "string",
-            "description": "MOCK. The session window title. Wrapped (single-session) or tickered (dual).",
-            "examples": ["refactor the inline flow layout"]
-          },
-          "unpushed": {
-            "type": "integer", "minimum": 0,
-            "description": "MOCK. Unpushed commit count; shown as ↑N after the folder (hidden when 0 or idle)."
-          }
-        }
-      }
+      "description": "LEGACY, still rendered. A Claude-only desktop. Equivalent to `items` where every row is a session; prefer `items`, which can also express a window (and a desktop holding one of each).",
+      "items": { "$ref": "#/definitions/sessionRow" }
+    },
+    "is_claude": {
+      "type": "boolean",
+      "description": "LEGACY and IGNORED. The row's own shape now decides how it draws, so this flag no longer selects a layout. Harmless to keep sending; nothing reads it."
     },
     "title": {
       "type": "string",
-      "description": "Used only when is_claude=false: the window title (shown wrapped under the app). Claude sessions carry their title inside sessions[].title instead.",
+      "description": "LEGACY, still rendered: the window title of the flat single-window form. A row inside `items` carries its own `title`.",
       "examples": ["lib.rs — pwetty-box — Visual Studio Code"]
     },
     "app": {
       "type": "string",
-      "description": "Used only when is_claude=false: the app/window label.",
+      "description": "LEGACY, still rendered: the app/window label of the flat single-window form.",
       "examples": ["Firefox", "VS Code"]
     },
     "app_icon": {
       "type": "string",
-      "description": "Used only when is_claude=false: a bundled icon name (e.g. 'code') or an absolute path to an .svg.",
-      "examples": ["code", "/usr/share/icons/hicolor/scalable/apps/firefox.svg"]
+      "description": "LEGACY, still rendered: the icon of the flat single-window form — a bundled name or an absolute .svg path.",
+      "examples": ["code"]
     }
   }
 }

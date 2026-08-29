@@ -1,0 +1,7 @@
+{
+  "shortcut": 6,
+  "items": [
+    { "kind": "app", "app": "VS Code", "app_icon": "code", "title": "schema.json — pwetty-box" },
+    { "kind": "app", "app": "Terminal", "app_icon": "terminal", "title": "cargo test --release" }
+  ]
+}
