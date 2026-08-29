@@ -116,6 +116,10 @@ done
 echo "rendered $(find "$out" -name '*.png' | wc -l) png(s) into $out"
 """
 
+[tasks.docs]
+description = "Gate the markdown: front matter, ADR shape, dead links and anchors"
+run = "python3 scripts/check-docs.py"
+
 [tasks.test]
 description = "Run the test suite"
 run = "cargo test"
@@ -141,7 +145,7 @@ description = "Run clippy with warnings denied, over all targets"
 run = "cargo clippy --all-targets -- -D warnings"
 
 [tasks.check]
-description = "Everything a change has to pass: lint, tests, tiles, render"
+description = "Everything a change has to pass: lint, tests, tiles, render, docs"
 # Sequential rather than `depends`, which runs in parallel: these legs share one
 # target/ directory and one release binary, and a lint rebuilding under a test
 # run is a race with a confusing failure. No `restart` leg — a check that kills
@@ -154,4 +158,5 @@ run = [
   "mise run test",
   "mise run tiles",
   "mise run render",
+  "mise run docs",
 ]
