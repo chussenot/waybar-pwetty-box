@@ -8,6 +8,9 @@ name: CI
 #            reproduce, so the workflow deliberately holds no build knowledge
 #            of its own beyond "install the deps, run the task".
 #   commits  pull requests only: conventional-commit rules over the PR range.
+#   msrv     builds on the rust-version Cargo.toml claims, so the claim stays
+#            true. Not a leg of `check`: it doubles the build for a fact that
+#            changes about once a year.
 #
 # Every action is pinned by commit SHA, with the tag in a trailing comment for
 # humans; dependabot moves both. Pinning cocogitto/cocogitto-action also pins
@@ -17,11 +20,17 @@ name: CI
 on:
   push:
     branches: [main]
+    # Release tags too: `cog bump` tags a commit that main may already have
+    # built, but a tag is what someone installs from, so it gets its own run.
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  CARGO_TERM_COLOR: always
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -108,3 +117,38 @@ jobs:
             exit 1
           fi
           echo "every commit in $range carries a scope"
+
+  msrv:
+    name: MSRV (rust-version in Cargo.toml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install: true
+          cache: true
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $(mise run deps:list-ci)
+
+      # rust-toolchain.toml pins 1.92 for development; this job deliberately
+      # steps around it to test the *other* number — the rust-version floor
+      # Cargo.toml advertises to anyone depending on this crate. Read it from
+      # the manifest so the two can never disagree.
+      - name: Install the advertised MSRV
+        id: msrv
+        run: |
+          set -eu
+          v=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$v" || { echo "Cargo.toml has no rust-version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          rustup toolchain install "$v" --profile minimal --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: msrv-${{ steps.msrv.outputs.version }}
+
+      - run: cargo +${{ steps.msrv.outputs.version }} check --all-targets

@@ -1,7 +1,7 @@
 ---
 title: Testing, screenshots and CI
 status: active
-date: 2026-08-29
+date: 2026-08-30
 ---
 
 # Testing, screenshots and CI
@@ -91,7 +91,7 @@ matching its unique config path.
 
 ## CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) has two jobs:
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) has three jobs:
 
 - **check** — installs the system packages `mise run deps:list-ci` prints (the
   same list `mise run deps` checks for), then runs `mise run check`. Identical
@@ -102,6 +102,14 @@ matching its unique config path.
   (`BASE..HEAD`), plus an assertion that every commit subject carries a scope.
   It never walks history before the baseline tag; see
   [versioning.md](versioning.md).
+- **msrv** — builds on the `rust-version` floor `Cargo.toml` advertises (1.88),
+  reading the number out of the manifest so the two cannot disagree. It steps
+  around `rust-toolchain.toml`'s 1.92 development pin on purpose: those are two
+  different numbers, and only one of them is a promise to anyone depending on
+  this crate. The claim was checked before the job was written — a clean
+  `cargo +1.88 check --all-targets` passes — so this asserts a verified fact
+  rather than a hope. It is not a leg of `check`: it doubles the build for
+  something that changes about once a year.
 
 Actions are pinned by commit SHA and moved by
 [dependabot](../.github/dependabot.yml). Pinning `cocogitto/cocogitto-action`
