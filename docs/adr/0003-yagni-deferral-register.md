@@ -1,7 +1,7 @@
 ---
 title: "ADR-0003: The YAGNI deferral register"
 status: active
-date: 2026-08-29
+date: 2026-08-30
 decision-makers:
   - chussenot
 ---
@@ -35,11 +35,10 @@ Rows are added by the change that defers, not retrospectively.
 | 2 | **`<bar>` / `<ring>` / `<sparkline>` inline embeds** | `markup::Embed` → measured placement → `draw_flow`; `<wrap>`/`<tickerbox>`/`<status>` all ride it | A producer emits a numeric series (or a bounded ratio) that a tile currently renders as digits, and the digits are demonstrably harder to read at a glance in a rendered PNG. |
 | 3 | **Mixing inline embeds with `<box>`/`<glow>` span effects in one tile** | Both paths exist; only their composition is untested | A tile design needs both. Cost when it fires: `draw_flow` and `span_rect` currently answer different questions about position, and reconciling them is the actual work — budget it, don't discover it. |
 | 4 | **Validating samples against the JSON Schema in `pwetty check`** | `check` already loads both; it compares template variables to schema properties and renders every sample | A payload that satisfies the template but violates the schema reaches a tile — a wrong `type`, a missing `required` field the template tolerates via `default()`. Cost when it fires: a JSON Schema crate as a dependency of the CLI, which is why it has not been paid yet. |
-| 5 | **`fmt-check` as a leg of `mise run check`** | The task exists; only its membership in `check` is deferred | The two rustfmt comment-alignment hunks in `lib.rs` are fixed (rustfmt reflows a two-line explanation of `halo` into a trailing comment). The trigger is that specific fix, not a general "when we get to it". |
-| 6 | **Antithesis instrumentation in the code** | `antithesis/scratchbook/` catalogues ~60 properties and their assertions; `existing-assertions.md` records that the codebase has none | An Antithesis run is actually commissioned. Until then the catalogue is a design artifact — see [the study](../studies/antithesis-property-sweep.md). |
-| 7 | **Vendoring or submoduling the producer repos whose goldens we copy** | `tests/tile_gate.rs` compares against a sibling checkout and skips loudly when absent | The loud skip stops being loud enough: a drift between a tile's `samples/` and a producer's goldens ships to a user. Cost when it fires: this repo's test suite starts depending on another repo's layout. |
-| 8 | **Installing the `.so` to a versioned or prefixed path** | `mise run install`; `module_path` points straight at `target/release` | Someone needs two builds of the module resident at once (an A/B of a render change on one bar). See [ADR-0002](0002-install-restart-contract.md) for why the copy was not worth it for the single-build case. |
-| 9 | **A `[tools]` toolchain pin in `mise.toml`** | `rust-toolchain.toml` pins 1.92 and rustup honours it on the first `cargo` call | Never, unless `rust-toolchain.toml` stops being honoured. Two files that can disagree about the toolchain is the exact failure the pin exists to prevent. Recorded here so the next person does not add it as an obvious improvement. |
+| 5 | **Antithesis instrumentation in the code** | `antithesis/scratchbook/` catalogues ~60 properties and their assertions; `existing-assertions.md` records that the codebase has none | An Antithesis run is actually commissioned. Until then the catalogue is a design artifact — see [the study](../studies/antithesis-property-sweep.md). |
+| 6 | **Vendoring or submoduling the producer repos whose goldens we copy** | `tests/tile_gate.rs` compares against a sibling checkout and skips loudly when absent | The loud skip stops being loud enough: a drift between a tile's `samples/` and a producer's goldens ships to a user. Cost when it fires: this repo's test suite starts depending on another repo's layout. |
+| 7 | **Installing the `.so` to a versioned or prefixed path** | `mise run install`; `module_path` points straight at `target/release` | Someone needs two builds of the module resident at once (an A/B of a render change on one bar). See [ADR-0002](0002-install-restart-contract.md) for why the copy was not worth it for the single-build case. |
+| 8 | **A `[tools]` toolchain pin in `mise.toml`** | `rust-toolchain.toml` pins 1.92 and rustup honours it on the first `cargo` call | Never, unless `rust-toolchain.toml` stops being honoured. Two files that can disagree about the toolchain is the exact failure the pin exists to prevent. Recorded here so the next person does not add it as an obvious improvement. |
 
 ## Alternatives, priced
 

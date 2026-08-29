@@ -16,19 +16,24 @@ It runs, sequentially (shared `target/` — parallel legs race):
 
 | Leg | Command | Gates |
 |---|---|---|
+| `fmt-check` | `cargo fmt -- --check` | formatting |
 | `lint` | `cargo clippy --all-targets -- -D warnings` | including `examples/`, where the offscreen render paths live |
 | `test` | `cargo test` | unit tests + the tile gate (`tests/tile_gate.rs`) |
 | `tiles` | `pwetty check` | every bundled tile: template ↔ schema ↔ samples |
 | `render` | `pwetty render --all-states` (headless) | every sample of every tile actually paints |
 | `docs` | `scripts/check-docs.py` | front matter, ADR shape, dead links and anchors |
 
-`fmt-check` is **not** a leg of `check`, and that is a statement about this tree
-rather than about formatting: rustfmt currently wants two comment-alignment
-changes in `lib.rs` that make the code worse (it reflows a two-line explanation
-of `halo` into a trailing comment hanging off the previous statement). A gate
-that is red on arrival is one people switch off, and a gate you go green by
-degrading a comment is worse than none. Fix those two hunks and `fmt-check`
-belongs in `check`.
+`fmt-check` was held out of `check` for a long time, and how it got back in is
+worth keeping: rustfmt wanted two comment-alignment changes in `lib.rs` that
+made the code worse — it read a two-line explanation of `halo` as a
+continuation of the trailing comment on the binding above and reflowed it to
+column 26, burying it. A gate that is red on arrival is one people switch off,
+and a gate you go green by degrading a comment is worse than none.
+
+The fix was not to accept that output. Moving the neighbouring note onto its own
+line makes the `halo` comment a top-level block again, so it reads correctly
+*and* formats clean. That is the shape of the answer to look for whenever a
+formatter and a comment disagree.
 
 `restart` is not a leg either — a check that kills your bar is one you stop
 running.

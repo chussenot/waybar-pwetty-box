@@ -130,12 +130,12 @@ run = "cargo fmt"
 
 [tasks.fmt-check]
 description = "Check formatting without writing changes"
-# NOT part of `check`, and that is a statement about this tree rather than about
-# formatting: rustfmt currently wants two comment-alignment changes in lib.rs
-# that make the code worse (it reflows a two-line explanation of `halo` into a
-# trailing comment hanging off the previous statement). A gate that is red on
-# arrival is one people switch off, and a gate you go green by degrading a
-# comment is worse than none. Fix those two hunks and this belongs in `check`.
+# A leg of `check` since the two comment-alignment hunks in lib.rs were fixed.
+# They were the whole reason it was held out: rustfmt reflowed a two-line
+# explanation of `halo` into a trailing comment hanging off the previous
+# statement, and a gate you go green by degrading a comment is worse than none.
+# The fix moved the neighbouring note onto its own line instead of accepting
+# that output, so the comment reads correctly AND formats clean.
 run = "cargo fmt -- --check"
 
 [tasks.lint]
@@ -145,7 +145,7 @@ description = "Run clippy with warnings denied, over all targets"
 run = "cargo clippy --all-targets -- -D warnings"
 
 [tasks.check]
-description = "Everything a change has to pass: lint, tests, tiles, render, docs"
+description = "Everything a change has to pass: fmt, lint, tests, tiles, render, docs"
 # Sequential rather than `depends`, which runs in parallel: these legs share one
 # target/ directory and one release binary, and a lint rebuilding under a test
 # run is a race with a confusing failure. No `restart` leg — a check that kills
@@ -154,6 +154,7 @@ description = "Everything a change has to pass: lint, tests, tiles, render, docs
 # This is the whole of CI too: the workflow installs system packages and then
 # invokes this task, so a CI failure reproduces locally by name.
 run = [
+  "mise run fmt-check",
   "mise run lint",
   "mise run test",
   "mise run tiles",

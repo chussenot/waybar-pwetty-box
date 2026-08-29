@@ -39,11 +39,11 @@ had already made, and cocogitto from here forward.
 
 Two things to know if you work in this tree:
 
-- **`mise run check` grew two legs** — `render` (every bundled sample, painted
-  headless) and `docs` (front matter, ADR shape, dead links). Both run locally
-  and in CI with the same command. `fmt-check` is still deliberately out; the
-  reason, and the specific fix that would let it in, is
-  [deferral row 5](docs/adr/0003-yagni-deferral-register.md).
+- **`mise run check` grew three legs** — `fmt-check`, `render` (every bundled
+  sample, painted headless) and `docs` (front matter, ADR shape, dead links).
+  All run locally and in CI with the same command. `fmt-check` had been held
+  out because rustfmt wanted a change that buried a comment; that is fixed, so
+  it is a gate again.
 - **The README moved.** It answers *why* now and links out; the reference
   material it used to carry lives in [`docs/`](docs), one topic per file.
 
