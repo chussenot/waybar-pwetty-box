@@ -853,7 +853,8 @@ fn draw_flow(
     // right. Detected here (so `left` feeds the wrap width) but drawn after the
     // block height is known, so it centers on the whole content block.
     let mut left = pad;
-    let mut hero = false; // a leading gutter element occupies line0[0]
+    // Whether a leading gutter element occupies line0[0].
+    let mut hero = false;
     // Dark glow behind every text run, for contrast against a translucent bar (or
     // a watermark icon). Always on so all tiles' numbers and titles read crisply.
     let halo = true;
@@ -1573,10 +1574,10 @@ fn idle_age_color(ago: &str) -> (f64, f64, f64) {
     // (minutes, r, g, b) keyframes, ascending; interpolated linearly, clamped
     // at both ends.
     const KF: [(f64, f64, f64, f64); 5] = [
-        (5.0, 1.0, 1.0, 1.0),     // white
-        (60.0, 1.0, 0.0, 0.0),    // red
-        (180.0, 1.0, 0.0, 0.0),   // red (held)
-        (360.0, 0.78, 0.30, 1.0), // bright purple
+        (5.0, 1.0, 1.0, 1.0),      // white
+        (60.0, 1.0, 0.0, 0.0),     // red
+        (180.0, 1.0, 0.0, 0.0),    // red (held)
+        (360.0, 0.78, 0.30, 1.0),  // bright purple
         (540.0, 0.30, 0.08, 0.45), // dark purple
     ];
     let m = idle_minutes(ago);
