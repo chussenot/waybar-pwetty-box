@@ -661,9 +661,11 @@ fn draw_flow(
     // Dark glow behind every text run, for contrast against a translucent bar (or
     // a watermark icon). Always on so all tiles' numbers and titles read crisply.
     let halo = true;
+    let halo_w = config.font_size as f64 * 0.12;
     let mut hero_draw: Option<(&markup::Embed, f64)> = None;
     let mut watermark_draw: Option<(&markup::Embed, f64)> = None;
-    let mut gutter_draw: Option<(pango::Layout, f64, f64)> = None; // (layout, ink_top, ink_h)
+    // (layout, markup, ink_top, ink_h)
+    let mut gutter_draw: Option<(pango::Layout, &str, f64, f64)> = None;
     if let Some(FlowItem::Embed(idx)) = lines.first().and_then(|l| l.first()) {
         if let Some(e) = processed.embeds.get(*idx) {
             if e.tag == "icon" && attr(&e.attrs, "watermark").is_some() {
@@ -690,7 +692,7 @@ fn draw_flow(
                     run_ink(&e.inner, &style.font_family, config.font_size as f64);
                 left = pad + gw + config.font_size as f64 * 0.5;
                 hero = true;
-                gutter_draw = Some((layout, ink_top, ink_h));
+                gutter_draw = Some((layout, &e.inner, ink_top, ink_h));
             }
         }
     }
@@ -699,7 +701,7 @@ fn draw_flow(
     // as tall as it needs; every other line is one `line_h`. Pre-compute (and
     // keep the wrapped layouts) so the whole block can be vertically centered.
     let avail = (w - left - pad).max(20.0);
-    let mut wraps: Vec<Option<pango::Layout>> = Vec::with_capacity(lines.len());
+    let mut wraps: Vec<Option<(pango::Layout, &str)>> = Vec::with_capacity(lines.len());
     let mut heights: Vec<f64> = Vec::with_capacity(lines.len());
     for items in &lines {
         let wrap = items.iter().find_map(|it| match *it {
@@ -710,7 +712,7 @@ fn draw_flow(
             Some(e) => {
                 let layout = text::layout_wrapped(cr, &e.inner, avail, style);
                 let hgt = (layout.pixel_size().1 as f64).max(line_h);
-                wraps.push(Some(layout));
+                wraps.push(Some((layout, &e.inner)));
                 heights.push(hgt);
             }
             None => {
@@ -740,13 +742,14 @@ fn draw_flow(
         draw_icon(cr, &e.attrs, pad + hero_h / 2.0, cy, hero_h, scale);
     }
     // Big text gutter, ink-centered on the content block at the left pad.
-    if let Some((layout, ink_top, ink_h)) = &gutter_draw {
+    if let Some((layout, inner, ink_top, ink_h)) = &gutter_draw {
         let cy = top_pad + total / 2.0;
         let gy = cy - ink_top - ink_h / 2.0;
         if halo {
-            text::halo(cr, layout, pad, gy, config.font_size as f64 * 0.12);
+            text::paint_haloed(cr, layout, inner, pad, gy, halo_w, style, scale);
+        } else {
+            text::paint(cr, layout, pad, gy, style);
         }
-        text::paint(cr, layout, pad, gy, style);
     }
 
     for (li, items) in lines.iter().enumerate() {
@@ -756,11 +759,12 @@ fn draw_flow(
         y += lh;
 
         // A wrapped body line: paint the multi-line block at the gutter, top-down.
-        if let Some(layout) = &wraps[li] {
+        if let Some((layout, inner)) = &wraps[li] {
             if halo {
-                text::halo(cr, layout, left, ly, config.font_size as f64 * 0.12);
+                text::paint_haloed(cr, layout, inner, left, ly, halo_w, style, scale);
+            } else {
+                text::paint(cr, layout, left, ly, style);
             }
-            text::paint(cr, layout, left, ly, style);
             continue;
         }
 
@@ -814,13 +818,14 @@ fn draw_flow(
                 continue;
             }
             match *item {
-                FlowItem::Text(_) => {
+                FlowItem::Text(seg) => {
                     if let Some(run) = &laid[ii] {
                         let y = center_y - run.ink_top - run.ink_h / 2.0;
                         if halo {
-                            text::halo(cr, &run.layout, x, y, config.font_size as f64 * 0.12);
+                            text::paint_haloed(cr, &run.layout, seg, x, y, halo_w, style, scale);
+                        } else {
+                            text::paint(cr, &run.layout, x, y, style);
                         }
-                        text::paint(cr, &run.layout, x, y, style);
                         x += run.width;
                     }
                 }

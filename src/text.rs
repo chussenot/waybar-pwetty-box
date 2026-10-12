@@ -4,6 +4,9 @@
 //! the femtovg layer composites to), and resolves the pixel rectangle of a
 //! plain-text byte range so custom effects can be positioned under/over a span.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use waybar_cffi::gtk::{cairo, pango};
 
 /// Base text style for a tile (overridable per-span via Pango markup).
@@ -216,4 +219,127 @@ pub fn halo(cr: &cairo::Context, layout: &pango::Layout, x: f64, y: f64, w: f64)
     let _ = cr.stroke_preserve();
     cr.set_source_rgba(0.0, 0.0, 0.02, 0.7);
     let _ = cr.fill();
+}
+
+/// Rasterized halo+text runs: key → (surface, logical offset of its origin
+/// relative to the layout's paint origin).
+type HaloCache = HashMap<HaloKey, (cairo::ImageSurface, f64, f64)>;
+
+/// (markup, family, size×64, wrap width, halo w×64, rgba8888, device scale×64,
+/// sub-pixel phase×64).
+type HaloKey = (String, String, u32, i32, u32, u32, u32, (u32, u32));
+
+/// Entries beyond this drop the whole cache (cheap, and content churn — folder
+/// names, idle ages — would otherwise grow it without bound).
+const HALO_CACHE_MAX: usize = 512;
+
+thread_local! {
+    static HALO_CACHE: RefCell<HaloCache> = RefCell::new(HashMap::new());
+}
+
+/// [`halo`] then [`paint`] `layout` at `(x, y)`, from a cached raster. The halo
+/// strokes every glyph outline three times — ~90% of a tile's draw time when
+/// done per frame — yet a run only changes when its markup does. So rasterize
+/// it once (at `scale` device px) onto a transparent surface and blit that on
+/// later frames. `markup` must be what `layout` was built from (it keys the
+/// cache, along with the font, wrap width, halo width, colour and scale).
+#[allow(clippy::too_many_arguments)]
+pub fn paint_haloed(
+    cr: &cairo::Context,
+    layout: &pango::Layout,
+    markup: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    style: &TextStyle,
+    scale: f64,
+) {
+    let q = |v: f64| (v * 64.0).round() as u32;
+    let b = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let c = style.color;
+    let rgba = b(c.0) << 24 | b(c.1) << 16 | b(c.2) << 8 | b(c.3);
+    // The blit must land on whole device pixels (a fractional offset resamples
+    // the raster — visibly blurry text). So split the device-space origin into
+    // an integer part (where we blit) and a sub-pixel phase, quantized to 1/4 px
+    // and baked into the raster — the same glyph positioning as a direct draw.
+    let (dev_x, dev_y) = cr.user_to_device(x, y);
+    let phase = |v: f64| ((v - v.floor()) * 4.0).round() / 4.0;
+    let (px, py) = (phase(dev_x), phase(dev_y));
+    let key = (
+        markup.to_string(),
+        style.font_family.clone(),
+        q(style.size_px),
+        layout.width(),
+        q(w),
+        rgba,
+        q(scale),
+        (q(px), q(py)),
+    );
+    let hit = HALO_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.contains_key(&key) {
+            if cache.len() >= HALO_CACHE_MAX {
+                cache.clear();
+            }
+            let raster = rasterize_haloed(layout, w, style, scale, (px, py))?;
+            cache.insert(key.clone(), raster);
+        }
+        cache.get(&key).cloned()
+    });
+    match hit {
+        // `(ox, oy)`: whole-px offset of the raster's top-left from the layout
+        // origin's integer pixel.
+        Some((surface, ox, oy)) => {
+            let _ = cr.save();
+            cr.identity_matrix();
+            cr.translate((dev_x - px).round() + ox, (dev_y - py).round() + oy);
+            cr.scale(1.0 / scale, 1.0 / scale);
+            if cr.set_source_surface(&surface, 0.0, 0.0).is_ok() {
+                let _ = cr.paint();
+            }
+            let _ = cr.restore();
+        }
+        // Couldn't allocate a raster: draw directly (the slow, exact path).
+        None => {
+            halo(cr, layout, x, y, w);
+            paint(cr, layout, x, y, style);
+        }
+    }
+}
+
+/// Draw [`halo`] + [`paint`] of `layout` onto a fresh transparent surface sized
+/// to its ink (plus the halo's reach) at `scale` device px, with the layout
+/// origin at sub-pixel `phase`. Returns the surface and its (whole-px) top-left
+/// relative to the layout origin's integer pixel.
+fn rasterize_haloed(
+    layout: &pango::Layout,
+    w: f64,
+    style: &TextStyle,
+    scale: f64,
+    phase: (f64, f64),
+) -> Option<(cairo::ImageSurface, f64, f64)> {
+    let (ink, logical) = layout.pixel_extents();
+    // Union of ink + logical boxes, grown by the widest stroke's half-width;
+    // whole px, so the raster stays pixel-aligned when blitted.
+    let pad = (w * 1.2).ceil() + 2.0;
+    let x0 = ink.x().min(logical.x()) as f64 - pad;
+    let y0 = ink.y().min(logical.y()) as f64 - pad;
+    let x1 = (ink.x() + ink.width()).max(logical.x() + logical.width()) as f64 + pad + 1.0;
+    let y1 = (ink.y() + ink.height()).max(logical.y() + logical.height()) as f64 + pad + 1.0;
+    let sw = ((x1 - x0) * scale).ceil().max(1.0) as i32;
+    let sh = ((y1 - y0) * scale).ceil().max(1.0) as i32;
+
+    let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, sw, sh).ok()?;
+    {
+        let cr = cairo::Context::new(&surface).ok()?;
+        cr.scale(scale, scale);
+        // The layout was built against another context; re-sync it to this one
+        // (same font options/resolution), then draw exactly as the direct path.
+        pangocairo::functions::update_layout(&cr, layout);
+        let (lx, ly) = (phase.0 - x0, phase.1 - y0);
+        halo(&cr, layout, lx, ly, w);
+        paint(&cr, layout, lx, ly, style);
+    }
+    surface.flush();
+    Some((surface, x0, y0))
 }
