@@ -317,11 +317,21 @@ src/
                 (shown when no content source is configured).
 ```
 
-Render flow per frame: `DrawingArea::draw` → (1) make the EGL context current,
-`Renderer::capture` the femtovg background → premultiply → Cairo paint; (2)
-`draw_content`: `markup::process` the content → `text::layout` (Pango) → draw each
-effect span behind the text → `text::paint`. Redraws come from the frame clock
-(`fps > 0`) and/or a content dirty-flag poll.
+Render flow per frame: `DrawingArea::draw` → (1) only if the tile needs GL, make
+the one shared, lazily-created EGL context current and render the femtovg/shader
+background → premultiply → Cairo paint; (2) `draw_content_cached`: on a content
+change, `markup::process` + Pango-lay-out the tile once into a cached static
+layer (text with its halo, icons), cut at each moving embed; every frame then
+blits that and redraws only the moving parts (status blink/glow, scrolling
+ticker), in their original stacking order. Tiles the cache can't hold (`<bg>`,
+plain effect tiles) take the direct `draw_content` path.
+
+Redraws come from the frame clock and/or a content dirty-flag poll. Animated
+tiles redraw at 45 fps by default (`fps` overrides it, and makes the tile
+redraw every frame even when static); an animation tick repaints only the
+moving parts' area unless the whole tile pulses. Measure changes with
+`test/bench.sh` (a nested waybar with ~40 tiles) and
+`examples/bench_frames.rs` (offscreen).
 
 **To add a custom effect** (e.g. `<glow>`, `<shader>`): add the tag name to
 `EFFECT_TAGS` in `lib.rs`, then handle it in `draw_content` — `text::span_rect`

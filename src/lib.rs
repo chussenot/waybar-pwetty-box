@@ -449,9 +449,10 @@ const EFFECT_TAGS: &[&str] = &["box", "glow"];
 const EMBED_TAGS: &[&str] = &["tickerbox", "status", "icon", "sep", "wrap", "gutter"];
 
 /// Default redraw rate for auto-animated tiles (blink/pulse/ticker) when the
-/// config doesn't pin `fps`. Below the monitor's 60Hz but smooth (the per-frame
-/// cost is now Cairo-only for content tiles). Override per-module with `fps`.
-const DEFAULT_ANIM_FPS: u32 = 30;
+/// config doesn't pin `fps`. Below the monitor's 60Hz but smooth: an animated
+/// frame only repaints its cached layer's moving parts, so the extra
+/// smoothness is cheap. Override per-module with `fps`.
+const DEFAULT_ANIM_FPS: u32 = 45;
 
 /// GPU resources + timing a span effect needs (currently `<glow>`). Without it
 /// (e.g. a CPU-only caller), GPU span effects are skipped; `<box>` still draws.
