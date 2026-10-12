@@ -1323,9 +1323,9 @@ fn draw_bg(cr: &gtk::cairo::Context, w: f64, h: f64, bg: &markup::BgSpec, fx: &m
     }
 }
 
-/// Rasterized icon buffers keyed by (source, device px, tint) — an ARGB32 buffer
-/// (or `None` for a cached failure).
-type IconCache = HashMap<(String, u32, Option<u32>), Option<Vec<u8>>>;
+/// Rasterized icons keyed by (source, device px, tint) — a ready-to-paint
+/// surface (cheap to clone: refcounted), or `None` for a cached failure.
+type IconCache = HashMap<(String, u32, Option<u32>), Option<gtk::cairo::ImageSurface>>;
 
 thread_local! {
     /// Per-thread icon raster cache, so animated tiles don't re-rasterize an SVG
@@ -1381,12 +1381,10 @@ fn draw_icon_alpha(
         (_, Some(s)) => std::fs::read(s).ok(),
         _ => None,
     });
-    if let Some(buf) = buf {
-        paint_argb32_at(
+    if let Some(surface) = buf {
+        paint_surface_at(
             cr,
-            px as usize,
-            px as usize,
-            buf,
+            &surface,
             scale,
             cx - cap_h / 2.0,
             cy - cap_h / 2.0,
@@ -1395,32 +1393,22 @@ fn draw_icon_alpha(
     }
 }
 
-/// Composite an already-ARGB32 (premultiplied, BGRA byte order) buffer at logical
-/// `(ox, oy)`, scaling device pixels back to logical. Like [`paint_rgba_at`] but
-/// for data that's already in Cairo's format (e.g. SVG raster, tiny-skia).
-#[allow(clippy::too_many_arguments)]
-fn paint_argb32_at(
+/// Composite a device-resolution `surface` at logical `(ox, oy)` and `alpha`,
+/// scaling device pixels back to logical. Like [`paint_rgba_at`] but for data
+/// already in Cairo's format (e.g. a cached SVG raster).
+fn paint_surface_at(
     cr: &gtk::cairo::Context,
-    w: usize,
-    h: usize,
-    data: Vec<u8>,
+    surface: &gtk::cairo::ImageSurface,
     device_scale: f64,
     ox: f64,
     oy: f64,
     alpha: f64,
 ) {
-    use gtk::cairo::{Format, ImageSurface};
-    let stride = 4 * w as i32;
-    let surface =
-        match ImageSurface::create_for_data(data, Format::ARgb32, w as i32, h as i32, stride) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
     let _ = cr.save();
     cr.translate(ox, oy);
     let s = 1.0 / device_scale;
     cr.scale(s, s);
-    if cr.set_source_surface(&surface, 0.0, 0.0).is_ok() {
+    if cr.set_source_surface(surface, 0.0, 0.0).is_ok() {
         let _ = cr.paint_with_alpha(alpha);
     }
     let _ = cr.restore();
@@ -1433,14 +1421,19 @@ fn raster_svg_cached(
     px: u32,
     tint: Option<(f32, f32, f32)>,
     load: impl FnOnce() -> Option<Vec<u8>>,
-) -> Option<Vec<u8>> {
+) -> Option<gtk::cairo::ImageSurface> {
+    use gtk::cairo::{Format, ImageSurface};
     let tint_key = tint.map(|(r, g, b)| {
         ((r * 255.0) as u32) << 16 | ((g * 255.0) as u32) << 8 | (b * 255.0) as u32
     });
     ICON_CACHE.with(|c| {
         c.borrow_mut()
             .entry((key, px, tint_key))
-            .or_insert_with(|| load().and_then(|b| svg::rasterize_argb32(&b, px, tint)))
+            .or_insert_with(|| {
+                let data = load().and_then(|b| svg::rasterize_argb32(&b, px, tint))?;
+                let (side, stride) = (px as i32, 4 * px as i32);
+                ImageSurface::create_for_data(data, Format::ARgb32, side, side, stride).ok()
+            })
             .clone()
     })
 }
@@ -1469,19 +1462,11 @@ fn draw_status_face(
     let box_side = height * MASCOT_ASPECT;
     let px = ((box_side * scale).round() as u32).max(1);
     let tint = render::parse_hex_color(hex).map(|c| (c.r, c.g, c.b));
-    if let Some(buf) = raster_svg_cached("name:claude-face".to_string(), px, tint, || {
+    if let Some(surface) = raster_svg_cached("name:claude-face".to_string(), px, tint, || {
         svg::bundled("claude-face").map(|s| s.as_bytes().to_vec())
     }) {
-        paint_argb32_at(
-            cr,
-            px as usize,
-            px as usize,
-            buf,
-            scale,
-            cx - box_side / 2.0,
-            cy - box_side / 2.0,
-            alpha,
-        );
+        let (ox, oy) = (cx - box_side / 2.0, cy - box_side / 2.0);
+        paint_surface_at(cr, &surface, scale, ox, oy, alpha);
     }
 }
 
@@ -1491,16 +1476,78 @@ fn glow_halo(cr: &gtk::cairo::Context, cx: f64, cy: f64, radius: f64, hex: &str,
     let Some(c) = render::parse_hex_color(hex) else {
         return;
     };
-    let (r, g, b) = (c.r as f64, c.g as f64, c.b as f64);
-    let grad = gtk::cairo::RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
-    grad.add_color_stop_rgba(0.0, r, g, b, alpha);
-    grad.add_color_stop_rgba(0.45, r, g, b, alpha * 0.45);
-    grad.add_color_stop_rgba(1.0, r, g, b, 0.0);
-    if cr.set_source(&grad).is_ok() {
-        cr.new_sub_path(); // detach from any leftover current point
-        cr.arc(cx, cy, radius, 0.0, std::f64::consts::TAU);
-        let _ = cr.fill();
+    if alpha <= 0.0 || radius <= 0.0 {
+        return;
     }
+    // Animated glows only vary `alpha`, which scales every stop uniformly — the
+    // same as painting a full-alpha bloom at `alpha`. So rasterize the bloom
+    // once per (colour, radius, sub-pixel phase) and blit it; a per-frame
+    // gradient fill was ~40% of a cached claude tile's frame.
+    let (dev_x, dev_y) = cr.user_to_device(cx, cy);
+    let Ok((dx, dy)) = cr.user_to_device_distance(radius, 0.0) else {
+        return;
+    };
+    let dev_r = dx.hypot(dy);
+    let phase = |v: f64| ((v - v.floor()) * 4.0).round() / 4.0;
+    let (px, py) = (phase(dev_x), phase(dev_y));
+    let q = |v: f64| (v * 64.0).round() as u32;
+    let rgb = ((c.r * 255.0) as u32) << 16 | ((c.g * 255.0) as u32) << 8 | (c.b * 255.0) as u32;
+    let key = (rgb, q(dev_r), q(px), q(py));
+    let bloom = BLOOM_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= BLOOM_CACHE_MAX && !cache.contains_key(&key) {
+            cache.clear();
+        }
+        cache
+            .entry(key)
+            .or_insert_with(|| raster_bloom((c.r as f64, c.g as f64, c.b as f64), dev_r, (px, py)))
+            .clone()
+    });
+    let Some((surface, off)) = bloom else { return };
+    let _ = cr.save();
+    cr.identity_matrix();
+    cr.translate((dev_x - px).round() - off, (dev_y - py).round() - off);
+    if cr.set_source_surface(&surface, 0.0, 0.0).is_ok() {
+        let _ = cr.paint_with_alpha(alpha);
+    }
+    let _ = cr.restore();
+}
+
+/// Cached full-alpha blooms: (rgb, device radius×64, phase x×64, phase y×64) →
+/// (surface, whole-px offset from the centre's integer pixel to its top-left).
+type BloomCache = HashMap<(u32, u32, u32, u32), Option<(gtk::cairo::ImageSurface, f64)>>;
+
+/// Blooms beyond this drop the cache (sizes track font/scale, so it stays tiny).
+const BLOOM_CACHE_MAX: usize = 64;
+
+thread_local! {
+    static BLOOM_CACHE: RefCell<BloomCache> = RefCell::new(HashMap::new());
+}
+
+/// Rasterize [`glow_halo`]'s bloom at full alpha, `r` device px in radius, its
+/// centre at sub-pixel `phase` within its integer pixel.
+fn raster_bloom(
+    (r, g, b): (f64, f64, f64),
+    radius: f64,
+    phase: (f64, f64),
+) -> Option<(gtk::cairo::ImageSurface, f64)> {
+    use gtk::cairo::{Context, Format, ImageSurface, RadialGradient};
+    let off = radius.ceil() + 1.0;
+    let side = (2.0 * off + 1.0) as i32;
+    let surface = ImageSurface::create(Format::ARgb32, side, side).ok()?;
+    {
+        let cr = Context::new(&surface).ok()?;
+        let (cx, cy) = (off + phase.0, off + phase.1);
+        let grad = RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
+        grad.add_color_stop_rgba(0.0, r, g, b, 1.0);
+        grad.add_color_stop_rgba(0.45, r, g, b, 0.45);
+        grad.add_color_stop_rgba(1.0, r, g, b, 0.0);
+        cr.set_source(&grad).ok()?;
+        cr.arc(cx, cy, radius, 0.0, std::f64::consts::TAU);
+        cr.fill().ok()?;
+    }
+    surface.flush();
+    Some((surface, off))
 }
 
 /// Draw a bold `glyph` (e.g. `?`) sized so its ink height ≈ `cap_h`, with its ink

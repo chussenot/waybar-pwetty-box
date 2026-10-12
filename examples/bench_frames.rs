@@ -31,6 +31,11 @@ fn main() {
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
         .collect();
     samples.sort();
+    // PWETTY_SAMPLES=working,idle: bench only those samples (by file stem).
+    if let Ok(only) = std::env::var("PWETTY_SAMPLES") {
+        let only: Vec<&str> = only.split(',').collect();
+        samples.retain(|p| only.contains(&p.file_stem().unwrap().to_str().unwrap()));
+    }
     let markups: Vec<String> = samples
         .iter()
         .map(|p| {
