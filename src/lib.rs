@@ -273,13 +273,14 @@ impl Module for PwettyBox {
                                                                // tick's `now - 0` is huge, so it draws immediately, then throttles.
             let last = std::cell::Cell::new(0i64);
             let tick_content = content.clone();
+            let tick_shared = shared.clone();
             area.add_tick_callback(move |area, clock| {
                 let animating = forced || tick_content.as_ref().is_some_and(|s| s.animating());
                 if animating {
                     let now = clock.frame_time();
                     if now - last.get() >= min_dt {
                         last.set(now);
-                        area.queue_draw();
+                        queue_frame(area, forced, &tick_shared.layer.borrow());
                     }
                 }
                 gtk::glib::ControlFlow::Continue
@@ -302,6 +303,27 @@ impl Module for PwettyBox {
         area.show();
 
         PwettyBox { _shared: shared }
+    }
+}
+
+/// Queue an animation frame: only the cached layer's live regions when that's
+/// all that moves (a status blink is a small fraction of the tile), else the
+/// whole widget. `forced` tiles (fps/shader) repaint everything every frame.
+fn queue_frame(area: &gtk::DrawingArea, forced: bool, layer: &Option<StaticLayer>) {
+    let damage = if forced {
+        None
+    } else {
+        layer.as_ref().and_then(StaticLayer::frame_damage)
+    };
+    let Some(rects) = damage else {
+        area.queue_draw();
+        return;
+    };
+    for (x, y, w, h) in rects {
+        // Round outward to whole logical px so no inked edge is left stale.
+        let (x0, y0) = (x.floor() as i32, y.floor() as i32);
+        let (x1, y1) = ((x + w).ceil() as i32, (y + h).ceil() as i32);
+        area.queue_draw_area(x0, y0, x1 - x0, y1 - y0);
     }
 }
 
@@ -527,6 +549,19 @@ pub enum LiveOp {
 }
 
 impl LiveOp {
+    /// Logical-px box `(x, y, w, h)` the op can ink, generously padded: the
+    /// widest status draw is the idle glow (radius `1.9·cap_h`, centred left of
+    /// `cx`) plus the badge's age label (to `cx + 1.5·cap_h`, then its text).
+    /// Only this needs repainting when the op moves.
+    pub fn bounds(&self) -> text::Rect {
+        match self {
+            LiveOp::Status { cx, cy, cap_h, .. } => {
+                (cx - 3.0 * cap_h, cy - 2.2 * cap_h, 6.5 * cap_h, 4.4 * cap_h)
+            }
+            LiveOp::Ticker { rect, .. } => *rect,
+        }
+    }
+
     fn draw(&self, cr: &gtk::cairo::Context, config: &Config, family: &str, time: f32, scale: f64) {
         match self {
             LiveOp::Status {
@@ -600,6 +635,18 @@ pub struct StaticLayer {
     tail: gtk::cairo::ImageSurface,
     pulse: bool,
     active: bool,
+}
+
+impl StaticLayer {
+    /// What an animation frame must repaint, in logical px: the live ops'
+    /// boxes, or `None` for the whole tile (a `<pulse>` fades all of it).
+    /// Everything else is unchanged between frames.
+    pub fn frame_damage(&self) -> Option<Vec<text::Rect>> {
+        if self.pulse {
+            return None;
+        }
+        Some(self.segments.iter().map(|(_, op)| op.bounds()).collect())
+    }
 }
 
 /// Whether [`draw_content_cached`] can serve `processed` from a static layer:
@@ -1072,6 +1119,12 @@ fn draw_flow(
                             cy: center_y,
                             cap_h,
                         }),
+                        // A ticker whose text fits never scrolls: draw it now,
+                        // so a cached layer bakes it in instead of redrawing it.
+                        "tickerbox" if ticker_fits(cr, &embed.inner, ew, line_h, config) => {
+                            draw_ticker(cr, &embed.inner, (x, ly, ew, line_h), config, time);
+                            None
+                        }
                         "tickerbox" => Some(LiveOp::Ticker {
                             inner: embed.inner.clone(),
                             rect: (x, ly, ew, line_h),
@@ -1751,16 +1804,37 @@ fn draw_ticker(
 
     // Too wide: scroll. Loop unit = text + a `◆` marker; the loop period adds a
     // clearing gap of ~1.25× the box width so the box empties between passes.
+    // The unit's text never changes while it scrolls, so it's painted from the
+    // text raster cache (no halo) rather than re-rasterized every frame.
     let unit = format!("{inner}   <span foreground=\"#89b4fa\">\u{25c6}</span>");
     let (layout, oy, uw) = text::layout_line(cr, &unit, rh, &style);
     let period = uw + rw * 1.25;
     let offset = (time as f64 * TICKER_SPEED).rem_euclid(period);
+    let scale = cr.user_to_device_distance(1.0, 0.0).map_or(1.0, |(d, _)| d);
     let mut x = rx - offset;
     while x < rx + rw {
-        text::paint(cr, &layout, x, ry + oy, &style);
+        text::paint_haloed(cr, &layout, &unit, x, ry + oy, 0.0, &style, scale);
         x += period;
     }
     let _ = cr.restore();
+}
+
+/// Whether a `<tickerbox>` with `inner` markup fits its `width`×`height` box —
+/// a ticker that fits never scrolls, so it can be drawn once, statically.
+fn ticker_fits(
+    cr: &gtk::cairo::Context,
+    inner: &str,
+    width: f64,
+    height: f64,
+    config: &Config,
+) -> bool {
+    let style = text::TextStyle {
+        font_family: font_family(config),
+        size_px: config.font_size as f64,
+        color: (0.95, 0.95, 1.0, 1.0),
+        align_center: false,
+    };
+    text::layout_line(cr, inner, height, &style).2 <= width
 }
 
 /// Draw a `<glow color="#rrggbb">` soft halo behind a text span (built-in GPU
@@ -2002,6 +2076,72 @@ mod tests {
                 );
             }
             assert!(layer.is_some(), "{sample}: flow tile should be cached");
+        }
+    }
+
+    #[test]
+    fn frame_damage_covers_everything_that_moves() {
+        // What GTK does on an animation tick: keep last frame's pixels and
+        // repaint only `frame_damage` (clipped). That must equal a full repaint
+        // — anything a live op inks outside its bounds would go stale on screen.
+        use gtk::cairo::{Context, Format, ImageSurface, Operator};
+        let cfg = config::resolve(serde_json::json!({ "tile": "claude", "width": 179 }));
+        let (w, h) = (cfg.width, cfg.height);
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tiles/claude/samples");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let data = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let markup = content::markup_for(&cfg, &data);
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+            for (t0, t1) in [(0.0f32, 0.4f32), (0.4, 1.1), (1.1, 2.9)] {
+                let mut layer = None;
+                let mut shaders = shader::ShaderCache::new();
+                let surface = ImageSurface::create(Format::ARgb32, w, h).unwrap();
+                let draw = |cr: &Context, t, layer: &mut Option<StaticLayer>, sh: &mut _| {
+                    let mut fx = EffectCtx {
+                        shaders: sh,
+                        time: t,
+                        frame: 0,
+                        scale: 1.0,
+                    };
+                    draw_content_cached(
+                        cr,
+                        &markup,
+                        w as f64,
+                        h as f64,
+                        &cfg,
+                        Some(&mut fx),
+                        layer,
+                    );
+                };
+                {
+                    let cr = Context::new(&surface).unwrap();
+                    draw(&cr, t0, &mut layer, &mut shaders);
+                }
+                let Some(rects) = layer.as_ref().and_then(StaticLayer::frame_damage) else {
+                    continue; // whole-tile repaint: trivially correct
+                };
+                {
+                    let cr = Context::new(&surface).unwrap();
+                    for (x, y, rw, rh) in &rects {
+                        let (x0, y0) = (x.floor(), y.floor());
+                        cr.rectangle(x0, y0, (x + rw).ceil() - x0, (y + rh).ceil() - y0);
+                    }
+                    cr.clip();
+                    // GTK clears the damaged area before the draw handler runs.
+                    cr.set_operator(Operator::Clear);
+                    cr.paint().unwrap();
+                    cr.set_operator(Operator::Over);
+                    draw(&cr, t1, &mut layer, &mut shaders);
+                }
+                let mut partial = surface;
+                let partial = partial.data().unwrap().to_vec();
+                let full = render_tile(&markup, t1, None);
+                assert!(
+                    partial == full,
+                    "{name} {t0}->{t1}: pixels outside frame_damage changed"
+                );
+            }
         }
     }
 }
