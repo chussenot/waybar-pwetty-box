@@ -37,10 +37,27 @@ use config::Config;
 use offscreen::OffscreenGl;
 use render::Renderer;
 
-/// Live rendering state, present once the offscreen GL context is up.
+thread_local! {
+    /// The one offscreen EGL context every module on this (GTK main) thread
+    /// renders with, created on first use — so a bar of pure-Cairo tiles never
+    /// opens EGL at all, and N GL tiles share one context instead of N. Its GL
+    /// objects (femtovg canvases, shader programs) are per-tile but live here.
+    static SHARED_GL: Option<OffscreenGl> = OffscreenGl::new()
+        .map_err(|e| eprintln!("pwetty-box: offscreen GL init failed: {e:?}"))
+        .ok();
+}
+
+/// Make the shared GL context current (creating it on first call). False if
+/// EGL is unavailable.
+fn shared_gl_current() -> bool {
+    SHARED_GL.with(|gl| gl.as_ref().is_some_and(|gl| gl.make_current().is_ok()))
+}
+
+/// A tile's rendering state. GL-side pieces are created lazily, in the shared
+/// context, the first time a frame needs them.
 struct Engine {
-    gl: OffscreenGl,
-    renderer: Renderer,
+    /// femtovg canvas for the demo tile (no content source); `None` until used.
+    renderer: Option<Renderer>,
     start: Instant,
     /// Optional tile-level background shader (path + lazily compiled + mtime).
     shader_path: Option<String>,
@@ -82,7 +99,7 @@ impl Engine {
 /// Shared between `init` and the draw/tick callbacks. GTK is single-threaded, so
 /// `Rc`/`RefCell` suffices.
 struct Shared {
-    engine: RefCell<Option<Engine>>,
+    engine: RefCell<Engine>,
     config: Config,
     /// The tile's static layer, rebuilt when its content changes.
     layer: RefCell<Option<StaticLayer>>,
@@ -111,29 +128,16 @@ impl Module for PwettyBox {
         // Content source (static text / refreshing command), if configured.
         let content = content::from_config(&config);
 
-        // Surfaceless EGL needs no window, so the engine can come up at init.
-        // femtovg renders into an image target; we composite with Cairo.
-        let engine = match OffscreenGl::new() {
-            Ok(gl) => match Renderer::new(&config, content.is_some()) {
-                Ok(renderer) => Some(Engine {
-                    gl,
-                    renderer,
-                    start: Instant::now(),
-                    shader_path: config.background_shader.clone(),
-                    shader: None,
-                    shader_mtime: None,
-                    span_shaders: shader::ShaderCache::new(),
-                    frame: 0,
-                }),
-                Err(e) => {
-                    eprintln!("pwetty-box: renderer init failed: {e:?}");
-                    None
-                }
-            },
-            Err(e) => {
-                eprintln!("pwetty-box: offscreen GL init failed: {e:?}");
-                None
-            }
+        // No GL work at init: the shared context and this tile's GL objects
+        // come up on the first frame that needs them.
+        let engine = Engine {
+            renderer: None,
+            start: Instant::now(),
+            shader_path: config.background_shader.clone(),
+            shader: None,
+            shader_mtime: None,
+            span_shaders: shader::ShaderCache::new(),
+            frame: 0,
         };
 
         let shared = Rc::new(Shared {
@@ -153,7 +157,8 @@ impl Module for PwettyBox {
                     .map(|s| s.uniforms())
                     .unwrap_or_default();
 
-                if let Some(engine) = shared.engine.borrow_mut().as_mut() {
+                {
+                    let engine = &mut *shared.engine.borrow_mut();
                     let wd = (area.allocated_width().max(1) * scale) as u32;
                     let hd = (area.allocated_height().max(1) * scale) as u32;
                     let wl = area.allocated_width().max(1) as f64;
@@ -174,7 +179,7 @@ impl Module for PwettyBox {
                     let needs_gl =
                         !has_content || engine.shader_path.is_some() || needs_glow || needs_bg;
 
-                    if !needs_gl || engine.gl.make_current().is_ok() {
+                    if !needs_gl || shared_gl_current() {
                         engine.refresh_shader();
                         let frame = engine.frame;
 
@@ -184,10 +189,18 @@ impl Module for PwettyBox {
                         let bg: Option<Vec<u8>> = if let Some(sh) = engine.shader.as_mut() {
                             Some(sh.render(wd as i32, hd as i32, time, frame, &shader_uniforms))
                         } else if !has_content && engine.shader_path.is_none() {
+                            // Demo tile: femtovg canvas, built on first use.
+                            if engine.renderer.is_none() {
+                                engine.renderer = Renderer::new(&shared.config, false)
+                                    .map_err(|e| {
+                                        eprintln!("pwetty-box: renderer init failed: {e:?}")
+                                    })
+                                    .ok();
+                            }
                             engine
                                 .renderer
-                                .capture(wd, hd, scale as f32, time)
-                                .ok()
+                                .as_mut()
+                                .and_then(|r| r.capture(wd, hd, scale as f32, time).ok())
                                 .map(|(_, _, rgba)| rgba)
                         } else {
                             None
