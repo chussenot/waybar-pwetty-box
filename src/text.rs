@@ -243,6 +243,7 @@ thread_local! {
 /// it once (at `scale` device px) onto a transparent surface and blit that on
 /// later frames. `markup` must be what `layout` was built from (it keys the
 /// cache, along with the font, wrap width, halo width, colour and scale).
+/// A halo width `w <= 0` caches the plain text (no halo) the same way.
 #[allow(clippy::too_many_arguments)]
 pub fn paint_haloed(
     cr: &cairo::Context,
@@ -281,7 +282,8 @@ pub fn paint_haloed(
             if cache.len() >= HALO_CACHE_MAX {
                 cache.clear();
             }
-            let raster = rasterize_haloed(layout, w, style, scale, (px, py))?;
+            let opts = cr.font_options().ok();
+            let raster = rasterize_haloed(layout, w, style, scale, (px, py), opts.as_ref())?;
             cache.insert(key.clone(), raster);
         }
         cache.get(&key).cloned()
@@ -301,7 +303,9 @@ pub fn paint_haloed(
         }
         // Couldn't allocate a raster: draw directly (the slow, exact path).
         None => {
-            halo(cr, layout, x, y, w);
+            if w > 0.0 {
+                halo(cr, layout, x, y, w);
+            }
             paint(cr, layout, x, y, style);
         }
     }
@@ -317,6 +321,7 @@ fn rasterize_haloed(
     style: &TextStyle,
     scale: f64,
     phase: (f64, f64),
+    font_options: Option<&cairo::FontOptions>,
 ) -> Option<(cairo::ImageSurface, f64, f64)> {
     let (ink, logical) = layout.pixel_extents();
     // Union of ink + logical boxes, grown by the widest stroke's half-width;
@@ -333,11 +338,26 @@ fn rasterize_haloed(
     {
         let cr = cairo::Context::new(&surface).ok()?;
         cr.scale(scale, scale);
-        // The layout was built against another context; re-sync it to this one
-        // (same font options/resolution), then draw exactly as the direct path.
+        // The caller's font options (hinting etc.), but never subpixel AA:
+        // with fontconfig's `rgba` set, Cairo renders glyphs onto a transparent
+        // surface as RGB-fringed coverage, which then shows as colour fringes
+        // once composited onto the bar. Grayscale is what text drawn over the
+        // opaque parts of a tile effectively gets anyway.
+        let mut opts = font_options
+            .cloned()
+            .unwrap_or_else(|| cairo::FontOptions::new().expect("cairo font options"));
+        if opts.antialias() == cairo::Antialias::Subpixel
+            || opts.antialias() == cairo::Antialias::Default
+        {
+            opts.set_antialias(cairo::Antialias::Gray);
+        }
+        cr.set_font_options(&opts);
+        // Re-sync the layout to this context, then draw as the direct path does.
         pangocairo::functions::update_layout(&cr, layout);
         let (lx, ly) = (phase.0 - x0, phase.1 - y0);
-        halo(&cr, layout, lx, ly, w);
+        if w > 0.0 {
+            halo(&cr, layout, lx, ly, w);
+        }
         paint(&cr, layout, lx, ly, style);
     }
     surface.flush();
