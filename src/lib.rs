@@ -84,6 +84,8 @@ impl Engine {
 struct Shared {
     engine: RefCell<Option<Engine>>,
     config: Config,
+    /// The tile's static layer, rebuilt when its content changes.
+    layer: RefCell<Option<StaticLayer>>,
 }
 
 pub struct PwettyBox {
@@ -137,6 +139,7 @@ impl Module for PwettyBox {
         let shared = Rc::new(Shared {
             engine: RefCell::new(engine),
             config,
+            layer: RefCell::new(None),
         });
 
         {
@@ -214,7 +217,15 @@ impl Module for PwettyBox {
                                 frame,
                                 scale: scale as f64,
                             };
-                            draw_content(cr, markup, wl, hl, &shared.config, Some(&mut fx));
+                            draw_content_cached(
+                                cr,
+                                markup,
+                                wl,
+                                hl,
+                                &shared.config,
+                                Some(&mut fx),
+                                &mut shared.layer.borrow_mut(),
+                            );
                         }
                     }
                 }
@@ -459,7 +470,7 @@ pub fn draw_content(
     // Tiles with inline embeds compose explicitly (line-by-line, left-to-right);
     // tiles without use the richer wrapping + effect path.
     if !processed.embeds.is_empty() {
-        draw_flow(cr, &processed, w, h, config, &style, time, scale);
+        draw_flow(cr, &processed, w, h, config, &style, time, scale, None);
     } else {
         let (layout, ox, oy) = text::layout(cr, &processed.markup, w, h, &style);
 
@@ -485,6 +496,206 @@ pub fn draw_content(
         // Bright floor (0.4): the tile dims but never disappears.
         let _ = cr.paint_with_alpha(osc(time, PULSE_PERIOD, 0.40));
     }
+}
+
+/// A time-driven flow element, positioned by layout but drawn per frame — what
+/// a cached static layer can't hold.
+pub enum LiveOp {
+    Status {
+        attrs: Vec<(String, String)>,
+        cx: f64,
+        cy: f64,
+        cap_h: f64,
+    },
+    Ticker {
+        inner: String,
+        rect: text::Rect,
+    },
+}
+
+impl LiveOp {
+    fn draw(&self, cr: &gtk::cairo::Context, config: &Config, family: &str, time: f32, scale: f64) {
+        match self {
+            LiveOp::Status {
+                attrs,
+                cx,
+                cy,
+                cap_h,
+            } => draw_status(cr, attrs, *cx, *cy, *cap_h, family, time, scale),
+            LiveOp::Ticker { inner, rect } => draw_ticker(cr, inner, *rect, config, time),
+        }
+    }
+}
+
+/// Records a flow tile's drawing as alternating static rasters and [`LiveOp`]s,
+/// in draw order: each live op seals the raster drawn so far and starts a new
+/// one, so a moving element still sits between what's under and over it.
+pub struct Segments {
+    size: (i32, i32),
+    scale: f64,
+    /// Sealed `(raster, live op drawn right after it)` pairs.
+    done: Vec<(gtk::cairo::ImageSurface, LiveOp)>,
+    current: gtk::cairo::ImageSurface,
+}
+
+impl Segments {
+    fn new(size: (i32, i32), scale: f64) -> Option<(Self, gtk::cairo::Context)> {
+        let current = Self::surface(size)?;
+        let cr = Self::context(&current, scale)?;
+        let segs = Self {
+            size,
+            scale,
+            done: Vec::new(),
+            current,
+        };
+        Some((segs, cr))
+    }
+
+    fn surface(size: (i32, i32)) -> Option<gtk::cairo::ImageSurface> {
+        use gtk::cairo::{Format, ImageSurface};
+        ImageSurface::create(Format::ARgb32, size.0.max(1), size.1.max(1)).ok()
+    }
+
+    fn context(s: &gtk::cairo::ImageSurface, scale: f64) -> Option<gtk::cairo::Context> {
+        let cr = gtk::cairo::Context::new(s).ok()?;
+        cr.scale(scale, scale);
+        Some(cr)
+    }
+
+    /// Seal the raster drawn so far, queue `op` after it, and return the
+    /// context for the next raster — or hand `op` back if one couldn't be
+    /// allocated (drawing then continues on the current raster).
+    fn cut(&mut self, op: LiveOp) -> Result<gtk::cairo::Context, LiveOp> {
+        let Some((next, next_cr)) =
+            Self::surface(self.size).and_then(|s| Self::context(&s, self.scale).map(|cr| (s, cr)))
+        else {
+            return Err(op);
+        };
+        let sealed = std::mem::replace(&mut self.current, next);
+        sealed.flush();
+        self.done.push((sealed, op));
+        Ok(next_cr)
+    }
+}
+
+/// A flow tile pre-rendered as [`Segments`], rebuilt only when its markup, size
+/// or scale changes. Each frame blits the rasters and redraws the live ops
+/// between them.
+pub struct StaticLayer {
+    key: (String, i32, i32, u32),
+    segments: Vec<(gtk::cairo::ImageSurface, LiveOp)>,
+    tail: gtk::cairo::ImageSurface,
+    pulse: bool,
+    active: bool,
+}
+
+/// Whether [`draw_content_cached`] can serve `processed` from a static layer:
+/// flow tiles (inline embeds) without a per-frame `<bg>` shader layer. Plain
+/// effect tiles (`<glow>`) keep the direct path.
+fn cacheable(processed: &markup::Processed) -> bool {
+    !processed.embeds.is_empty() && processed.bg.is_none()
+}
+
+/// [`draw_content`], served from `cache` when possible: the static parts of the
+/// tile are drawn once per content change, and each frame only blits them and
+/// redraws the moving embeds (status blink/glow, ticker) in their original
+/// order. Falls back to [`draw_content`] for tiles the cache can't hold.
+pub fn draw_content_cached(
+    cr: &gtk::cairo::Context,
+    content_markup: &str,
+    w: f64,
+    h: f64,
+    config: &Config,
+    fx: Option<&mut EffectCtx>,
+    cache: &mut Option<StaticLayer>,
+) {
+    let time = fx.as_ref().map(|f| f.time).unwrap_or(0.0);
+    let scale = fx.as_ref().map(|f| f.scale).unwrap_or(1.0);
+    let key = (
+        content_markup.to_string(),
+        (w * scale).round() as i32,
+        (h * scale).round() as i32,
+        (scale * 64.0).round() as u32,
+    );
+
+    if cache.as_ref().is_none_or(|c| c.key != key) {
+        *cache = None;
+        let processed = markup::process(content_markup, EFFECT_TAGS, EMBED_TAGS);
+        if !cacheable(&processed) {
+            draw_content(cr, content_markup, w, h, config, fx);
+            return;
+        }
+        *cache = build_static_layer(&processed, key, w, h, config, scale);
+    }
+    let Some(layer) = cache.as_ref() else {
+        draw_content(cr, content_markup, w, h, config, fx);
+        return;
+    };
+
+    let family = font_family(config);
+    let blit = |s: &gtk::cairo::ImageSurface| {
+        let _ = cr.save();
+        cr.scale(1.0 / scale, 1.0 / scale);
+        if cr.set_source_surface(s, 0.0, 0.0).is_ok() {
+            let _ = cr.paint();
+        }
+        let _ = cr.restore();
+    };
+    // The active card sits outside the pulse group (it mustn't oscillate), as
+    // in `draw_content`; it's two cheap Cairo ops, so it isn't cached.
+    if layer.active {
+        draw_active_panel(cr, w, h);
+    }
+    if layer.pulse {
+        cr.push_group();
+    }
+    for (raster, op) in &layer.segments {
+        blit(raster);
+        op.draw(cr, config, &family, time, scale);
+    }
+    blit(&layer.tail);
+    if layer.pulse {
+        let _ = cr.pop_group_to_source();
+        let _ = cr.paint_with_alpha(osc(time, PULSE_PERIOD, 0.40));
+    }
+}
+
+/// Pre-render a flow tile as [`Segments`] at device `scale`.
+fn build_static_layer(
+    processed: &markup::Processed,
+    key: (String, i32, i32, u32),
+    w: f64,
+    h: f64,
+    config: &Config,
+    scale: f64,
+) -> Option<StaticLayer> {
+    let (mut segs, cr) = Segments::new((key.1, key.2), scale)?;
+    let style = text::TextStyle {
+        font_family: font_family(config),
+        size_px: config.font_size as f64,
+        color: (0.95, 0.95, 1.0, 1.0),
+        align_center: false,
+    };
+    draw_flow(
+        &cr,
+        processed,
+        w,
+        h,
+        config,
+        &style,
+        0.0,
+        scale,
+        Some(&mut segs),
+    );
+    drop(cr);
+    segs.current.flush();
+    Some(StaticLayer {
+        key,
+        segments: segs.done,
+        tail: segs.current,
+        pulse: processed.pulse,
+        active: processed.active,
+    })
 }
 
 /// Measured rendered ink extents `(top, height)` keyed by (run markup, family,
@@ -644,7 +855,11 @@ fn draw_flow(
     style: &text::TextStyle,
     time: f32,
     scale: f64,
+    mut live: Option<&mut Segments>,
 ) {
+    // Rebound when `live` cuts a new segment, so later drawing lands on it.
+    let mut cr = cr.clone();
+    let cr = &mut cr;
     let line_h = config.font_size as f64 * 1.4;
     let pad = config.font_size as f64 * 0.8; // L/R pad — also the active card's inner margin
     let center = config.align.as_deref() == Some("center");
@@ -835,25 +1050,36 @@ fn draw_flow(
                     };
                     let cap_h = cap_at(&laid, ii, line_h);
                     let ew = embed_ew(&embed.tag, &embed.attrs, cap_h);
-                    match embed.tag.as_str() {
-                        "status" => draw_status(
-                            cr,
-                            &embed.attrs,
-                            x + ew / 2.0,
-                            center_y,
+                    // Time-driven embeds go to `live` when the caller is
+                    // caching the static layer; otherwise draw them in place.
+                    let op = match embed.tag.as_str() {
+                        "status" => Some(LiveOp::Status {
+                            attrs: embed.attrs.clone(),
+                            cx: x + ew / 2.0,
+                            cy: center_y,
                             cap_h,
-                            &style.font_family,
-                            time,
-                            scale,
-                        ),
+                        }),
+                        "tickerbox" => Some(LiveOp::Ticker {
+                            inner: embed.inner.clone(),
+                            rect: (x, ly, ew, line_h),
+                        }),
                         "icon" => {
                             let isz = cap_h * icon_size(&embed.attrs);
-                            draw_icon(cr, &embed.attrs, x + ew / 2.0, center_y, isz, scale)
+                            draw_icon(cr, &embed.attrs, x + ew / 2.0, center_y, isz, scale);
+                            None
                         }
-                        "tickerbox" => {
-                            draw_ticker(cr, &embed.inner, (x, ly, ew, line_h), config, time)
+                        _ => None,
+                    };
+                    if let Some(op) = op {
+                        match live.as_deref_mut() {
+                            Some(segs) => match segs.cut(op) {
+                                Ok(next) => *cr = next,
+                                // No memory for a new raster: bake this frame's
+                                // pose in rather than lose the element.
+                                Err(op) => op.draw(cr, config, &style.font_family, time, scale),
+                            },
+                            None => op.draw(cr, config, &style.font_family, time, scale),
                         }
-                        _ => {}
                     }
                     x += ew;
                 }
@@ -1668,5 +1894,54 @@ mod tests {
         assert!((r - 0.89).abs() < 1e-6 && (g - 0.15).abs() < 1e-6 && (b - 0.5).abs() < 1e-6);
         // Within the 5..60 min window the red ramp climbs (green/blue drop).
         assert!(idle_age_color("12m").1 > idle_age_color("40m").1);
+    }
+
+    /// Render `markup` for the claude tile at `time`, direct or via `layer`.
+    fn render_tile(markup: &str, time: f32, layer: Option<&mut Option<StaticLayer>>) -> Vec<u8> {
+        use gtk::cairo::{Context, Format, ImageSurface};
+        let cfg = config::resolve(serde_json::json!({ "tile": "claude", "width": 179 }));
+        let (w, h) = (cfg.width, cfg.height);
+        let mut surface = ImageSurface::create(Format::ARgb32, w, h).unwrap();
+        {
+            let cr = Context::new(&surface).unwrap();
+            let mut shaders = shader::ShaderCache::new();
+            let mut fx = EffectCtx {
+                shaders: &mut shaders,
+                time,
+                frame: 0,
+                scale: 1.0,
+            };
+            let (wf, hf) = (w as f64, h as f64);
+            match layer {
+                Some(l) => draw_content_cached(&cr, markup, wf, hf, &cfg, Some(&mut fx), l),
+                None => draw_content(&cr, markup, wf, hf, &cfg, Some(&mut fx)),
+            }
+        }
+        let px = surface.data().unwrap().to_vec();
+        px
+    }
+
+    #[test]
+    fn static_layer_matches_direct_draw_across_frames() {
+        // A status glow overlaps the line below it: the cached layer must keep
+        // it *under* that line (draw order), and the blink must still move.
+        let cfg = config::resolve(serde_json::json!({ "tile": "claude" }));
+        for sample in ["fleet", "working", "prompt", "idle"] {
+            let path = format!(
+                "{}/tiles/claude/samples/{sample}.json",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let data = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let markup = content::markup_for(&cfg, &data);
+            let mut layer = None;
+            for time in [0.0, 0.4, 1.1] {
+                assert!(
+                    render_tile(&markup, time, Some(&mut layer))
+                        == render_tile(&markup, time, None),
+                    "{sample} @ t={time}: cached render differs from direct"
+                );
+            }
+            assert!(layer.is_some(), "{sample}: flow tile should be cached");
+        }
     }
 }

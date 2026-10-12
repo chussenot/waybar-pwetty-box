@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use pwetty_box::config;
 use pwetty_box::content;
 use pwetty_box::shader::ShaderCache;
-use pwetty_box::{draw_content, EffectCtx};
+use pwetty_box::{draw_content, draw_content_cached, EffectCtx, StaticLayer};
 use waybar_cffi::gtk::cairo::{Context, Format, ImageSurface};
 
 fn main() {
@@ -41,6 +41,44 @@ fn main() {
 
     let (w, h) = (cfg.width, cfg.height);
     let mut cache = ShaderCache::new();
+
+    // PWETTY_PARITY=<dir>: instead of benching, render every sample through
+    // both the direct and the cached path at a few animation times and write
+    // `<dir>/{direct,cached}-<sample>-<t>.png` for pixel comparison.
+    if let Some(dir) = std::env::var_os("PWETTY_PARITY") {
+        let dir = std::path::PathBuf::from(dir);
+        for (si, m) in markups.iter().enumerate() {
+            let name = samples[si].file_stem().unwrap().to_string_lossy();
+            let mut layer = None;
+            for time in [0.0f32, 0.4, 1.1, 2.3] {
+                for (mode, use_cache) in [("direct", false), ("cached", true)] {
+                    let surface = ImageSurface::create(Format::ARgb32, w, h).unwrap();
+                    let cr = Context::new(&surface).unwrap();
+                    let mut fx = EffectCtx {
+                        shaders: &mut cache,
+                        time,
+                        frame: 0,
+                        scale: 1.0,
+                    };
+                    let (wf, hf) = (w as f64, h as f64);
+                    if use_cache {
+                        draw_content_cached(&cr, m, wf, hf, &cfg, Some(&mut fx), &mut layer);
+                    } else {
+                        draw_content(&cr, m, wf, hf, &cfg, Some(&mut fx));
+                    }
+                    drop(cr);
+                    let path = dir.join(format!("{mode}-{name}-{time}.png"));
+                    surface
+                        .write_to_png(&mut std::fs::File::create(path).unwrap())
+                        .unwrap();
+                }
+            }
+        }
+        return;
+    }
+    // PWETTY_NOCACHE=1 benches the direct path (no per-tile static layer).
+    let cached = std::env::var_os("PWETTY_NOCACHE").is_none();
+    let mut layers: Vec<Option<StaticLayer>> = (0..tiles).map(|_| None).collect();
     let mut draws: Vec<Duration> = Vec::with_capacity(tiles * (fps * secs) as usize);
     let frames = fps * secs;
     let start = Instant::now();
@@ -60,7 +98,13 @@ fn main() {
                 frame: f as i32,
                 scale: 1.0,
             };
-            draw_content(&cr, &markups[i % markups.len()], w as f64, h as f64, &cfg, Some(&mut fx));
+            let m = &markups[i % markups.len()];
+            let (wf, hf) = (w as f64, h as f64);
+            if cached {
+                draw_content_cached(&cr, m, wf, hf, &cfg, Some(&mut fx), &mut layers[i]);
+            } else {
+                draw_content(&cr, m, wf, hf, &cfg, Some(&mut fx));
+            }
             draws.push(d0.elapsed());
         }
         let busy = t0.elapsed();
