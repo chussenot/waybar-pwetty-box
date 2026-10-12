@@ -1537,11 +1537,24 @@ fn glow_halo(cr: &gtk::cairo::Context, cx: f64, cy: f64, radius: f64, hex: &str,
     // same as painting a full-alpha bloom at `alpha`. So rasterize the bloom
     // once per (colour, radius, sub-pixel phase) and blit it; a per-frame
     // gradient fill was ~40% of a cached claude tile's frame.
-    let (dev_x, dev_y) = cr.user_to_device(cx, cy);
-    let Ok((dx, dy)) = cr.user_to_device_distance(radius, 0.0) else {
+    // In the target's real device pixels — CTM and surface device scale (GTK's
+    // HiDPI) — so the bloom is rasterized at full resolution.
+    let Some(scale) = text::device_scale(cr) else {
+        // A transform the cache can't reproduce: fill the gradient directly.
+        let rgb = (c.r as f64, c.g as f64, c.b as f64);
+        let grad = gtk::cairo::RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
+        grad.add_color_stop_rgba(0.0, rgb.0, rgb.1, rgb.2, alpha);
+        grad.add_color_stop_rgba(0.45, rgb.0, rgb.1, rgb.2, alpha * 0.45);
+        grad.add_color_stop_rgba(1.0, rgb.0, rgb.1, rgb.2, 0.0);
+        if cr.set_source(&grad).is_ok() {
+            cr.new_sub_path();
+            cr.arc(cx, cy, radius, 0.0, std::f64::consts::TAU);
+            let _ = cr.fill();
+        }
         return;
     };
-    let dev_r = dx.hypot(dy);
+    let (dev_x, dev_y) = text::to_device(cr, cx, cy);
+    let dev_r = radius * scale;
     let phase = |v: f64| ((v - v.floor()) * 4.0).round() / 4.0;
     let (px, py) = (phase(dev_x), phase(dev_y));
     let q = |v: f64| (v * 64.0).round() as u32;
@@ -1558,13 +1571,8 @@ fn glow_halo(cr: &gtk::cairo::Context, cx: f64, cy: f64, radius: f64, hex: &str,
             .clone()
     });
     let Some((surface, off)) = bloom else { return };
-    let _ = cr.save();
-    cr.identity_matrix();
-    cr.translate((dev_x - px).round() - off, (dev_y - py).round() - off);
-    if cr.set_source_surface(&surface, 0.0, 0.0).is_ok() {
-        let _ = cr.paint_with_alpha(alpha);
-    }
-    let _ = cr.restore();
+    let origin = ((dev_x - px).round(), (dev_y - py).round());
+    text::blit_at_device_alpha(cr, &surface, origin, (-off, -off), scale, alpha);
 }
 
 /// Cached full-alpha blooms: (rgb, device radius×64, phase x×64, phase y×64) →
@@ -2032,11 +2040,30 @@ mod tests {
     }
 
     /// Render `markup` for the claude tile at `time`, direct or via `layer`.
+    /// A tile-sized target as GTK hands one to a draw handler at integer
+    /// `scale`: `scale`× the pixels, with a surface device scale so user space
+    /// stays in logical px (fractional outputs like 1.25 render at scale 2).
+    fn tile_surface(w: i32, h: i32, scale: i32) -> gtk::cairo::ImageSurface {
+        use gtk::cairo::{Format, ImageSurface};
+        let s = ImageSurface::create(Format::ARgb32, w * scale, h * scale).unwrap();
+        s.set_device_scale(scale as f64, scale as f64);
+        s
+    }
+
     fn render_tile(markup: &str, time: f32, layer: Option<&mut Option<StaticLayer>>) -> Vec<u8> {
-        use gtk::cairo::{Context, Format, ImageSurface};
+        render_tile_at(markup, time, layer, 1)
+    }
+
+    fn render_tile_at(
+        markup: &str,
+        time: f32,
+        layer: Option<&mut Option<StaticLayer>>,
+        scale: i32,
+    ) -> Vec<u8> {
+        use gtk::cairo::Context;
         let cfg = config::resolve(serde_json::json!({ "tile": "claude", "width": 179 }));
         let (w, h) = (cfg.width, cfg.height);
-        let mut surface = ImageSurface::create(Format::ARgb32, w, h).unwrap();
+        let mut surface = tile_surface(w, h, scale);
         {
             let cr = Context::new(&surface).unwrap();
             let mut shaders = shader::ShaderCache::new();
@@ -2044,7 +2071,7 @@ mod tests {
                 shaders: &mut shaders,
                 time,
                 frame: 0,
-                scale: 1.0,
+                scale: scale as f64,
             };
             let (wf, hf) = (w as f64, h as f64);
             match layer {
@@ -2068,15 +2095,67 @@ mod tests {
             );
             let data = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
             let markup = content::markup_for(&cfg, &data);
-            let mut layer = None;
-            for time in [0.0, 0.4, 1.1] {
+            // Scale 2 is what GTK uses on HiDPI and fractional (1.25) outputs.
+            for scale in [1, 2] {
+                let mut layer = None;
+                for time in [0.0, 0.4, 1.1] {
+                    let cached = render_tile_at(&markup, time, Some(&mut layer), scale);
+                    let direct = render_tile_at(&markup, time, None, scale);
+                    assert!(
+                        cached == direct,
+                        "{sample} @ t={time} scale {scale}: cached render differs from direct"
+                    );
+                }
+                assert!(layer.is_some(), "{sample}: flow tile should be cached");
+            }
+        }
+    }
+
+    /// Bounding box `(x0, y0, x1, y1)` of pixels with visible alpha in a
+    /// `w`-px-wide ARGB32 buffer.
+    fn ink_box(px: &[u8], w: usize) -> (usize, usize, usize, usize) {
+        let mut b = (usize::MAX, usize::MAX, 0, 0);
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            if p[3] > 24 {
+                let (x, y) = (i % w, i / w);
+                b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn hidpi_render_is_the_same_tile_twice_as_big() {
+        // GTK draws a HiDPI (or 1.25-scaled) output at scale 2 via the surface's
+        // device scale. Cached rasters once ignored it and drew text at half
+        // size, up and left — while cached == direct still held, as both paths
+        // shared the bug. So compare geometry against a scale-1 render instead.
+        let cfg = config::resolve(serde_json::json!({ "tile": "claude" }));
+        for sample in ["working", "fleet", "duo-window", "idle"] {
+            let path = format!(
+                "{}/tiles/claude/samples/{sample}.json",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let data = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let markup = content::markup_for(&cfg, &data);
+            for cached in [false, true] {
+                // A fresh layer per scale (a layer is keyed on its scale anyway).
+                let render = |scale| {
+                    let mut layer = None;
+                    let l = cached.then_some(&mut layer);
+                    render_tile_at(&markup, 0.4, l, scale)
+                };
+                let one = ink_box(&render(1), 179);
+                let two = ink_box(&render(2), 179 * 2);
+                // Halo/glow edges reach the tile's right edge on some samples
+                // (clamped at both scales), so check the left, top and bottom
+                // — the half-size bug moved all of them, by a lot.
+                let near = |a: usize, b: usize| a.abs_diff(b) <= 4;
                 assert!(
-                    render_tile(&markup, time, Some(&mut layer))
-                        == render_tile(&markup, time, None),
-                    "{sample} @ t={time}: cached render differs from direct"
+                    near(two.0, one.0 * 2) && near(two.1, one.1 * 2) && near(two.3, one.3 * 2 + 1),
+                    "{sample} (cached: {cached}): scale-2 ink {two:?} isn't 2x scale-1 {one:?}"
                 );
             }
-            assert!(layer.is_some(), "{sample}: flow tile should be cached");
         }
     }
 

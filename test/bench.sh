@@ -69,6 +69,15 @@ if [ "${BENCH_MIX:-}" = gl ]; then
     >"$cfg" || exit 1
 fi
 
+# BENCH_SCALE=1.25 runs the nested output at that scale — GTK then draws at
+# its integer ceiling (2), the HiDPI path a 1x run never exercises.
+niri_cfg="$here/niri.kdl"
+if [ -n "${BENCH_SCALE:-}" ]; then
+  niri_cfg="$scratch/bench-niri.kdl"
+  sed "s|^    mode \"1280x720\"$|    mode \"1280x720\"\n    scale ${BENCH_SCALE}|" "$here/niri.kdl" >"$niri_cfg"
+  grep -q "scale ${BENCH_SCALE}" "$niri_cfg" || { echo "BENCH_SCALE: couldn't patch niri.kdl" >&2; exit 1; }
+fi
+
 # A private runtime dir, short enough for a Unix socket path (108 bytes).
 runtime="$(mktemp -d /tmp/claude-1000/pwbench.XXXXXX)" || exit 1
 trap 'rm -rf "$runtime"' EXIT
@@ -85,7 +94,7 @@ LIBGL_ALWAYS_SOFTWARE=1 \
 GALLIUM_DRIVER=llvmpipe \
 BENCH_CFG="$cfg" BENCH_CSS="$here/waybar/style.css" BENCH_SECS="$secs" \
 BENCH_OUT="$scratch" \
-  timeout -k 5 $((secs + 30)) cage -- niri -c "$here/niri.kdl" -- bash "$here/bench-inner.sh"
+  timeout -k 5 $((secs + 30)) cage -- niri -c "$niri_cfg" -- bash "$here/bench-inner.sh"
 rc=$?
 echo "bench.sh done (rc=$rc)"
 cat "$scratch/bench-result.txt" 2>/dev/null || echo "no result (see $scratch/bench-waybar.log)"

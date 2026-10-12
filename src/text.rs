@@ -259,11 +259,23 @@ pub fn paint_haloed(
     let b = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
     let c = style.color;
     let rgba = b(c.0) << 24 | b(c.1) << 16 | b(c.2) << 8 | b(c.3);
+    // Rasterize at the target's real resolution: the CTM's scale times the
+    // surface's device scale (GTK puts HiDPI in the latter — a 1.25 output
+    // draws at 2×). `scale` from the caller can't see that, so derive it here.
+    let _ = scale;
+    let Some(scale) = device_scale(cr) else {
+        if w > 0.0 {
+            halo(cr, layout, x, y, w);
+        }
+        paint(cr, layout, x, y, style);
+        return;
+    };
     // The blit must land on whole device pixels (a fractional offset resamples
-    // the raster — visibly blurry text). So split the device-space origin into
-    // an integer part (where we blit) and a sub-pixel phase, quantized to 1/4 px
-    // and baked into the raster — the same glyph positioning as a direct draw.
-    let (dev_x, dev_y) = cr.user_to_device(x, y);
+    // the raster — visibly blurry text). So split the origin's position in
+    // device pixels into an integer part (where we blit) and a sub-pixel phase,
+    // quantized to 1/4 px and baked into the raster — the same glyph
+    // positioning as a direct draw.
+    let (dev_x, dev_y) = to_device(cr, x, y);
     let phase = |v: f64| ((v - v.floor()) * 4.0).round() / 4.0;
     let (px, py) = (phase(dev_x), phase(dev_y));
     let key = (
@@ -289,17 +301,11 @@ pub fn paint_haloed(
         cache.get(&key).cloned()
     });
     match hit {
-        // `(ox, oy)`: whole-px offset of the raster's top-left from the layout
-        // origin's integer pixel.
+        // `(ox, oy)`: logical offset of the raster's top-left from the layout
+        // origin; the raster is `scale` device px per logical px.
         Some((surface, ox, oy)) => {
-            let _ = cr.save();
-            cr.identity_matrix();
-            cr.translate((dev_x - px).round() + ox, (dev_y - py).round() + oy);
-            cr.scale(1.0 / scale, 1.0 / scale);
-            if cr.set_source_surface(&surface, 0.0, 0.0).is_ok() {
-                let _ = cr.paint();
-            }
-            let _ = cr.restore();
+            let snapped = ((dev_x - px).round(), (dev_y - py).round());
+            blit_at_device(cr, &surface, snapped, (ox * scale, oy * scale), scale);
         }
         // Couldn't allocate a raster: draw directly (the slow, exact path).
         None => {
@@ -309,6 +315,70 @@ pub fn paint_haloed(
             paint(cr, layout, x, y, style);
         }
     }
+}
+
+/// Device px per user unit on `cr`'s target: the CTM's scale times the target
+/// surface's device scale (where GTK puts HiDPI). `None` for a degenerate or
+/// rotated/sheared transform, which raster caches can't reproduce exactly.
+pub fn device_scale(cr: &cairo::Context) -> Option<f64> {
+    let m = cr.matrix();
+    if m.xy().abs() > 1e-9 || m.yx().abs() > 1e-9 || (m.xx() - m.yy()).abs() > 1e-9 {
+        return None;
+    }
+    let (sx, sy) = cr.target().device_scale();
+    if (sx - sy).abs() > 1e-9 {
+        return None;
+    }
+    let s = m.xx() * sx;
+    (s > 0.0).then_some(s)
+}
+
+/// User-space point `(x, y)` in the target's device pixels (CTM, then the
+/// surface's device scale).
+pub fn to_device(cr: &cairo::Context, x: f64, y: f64) -> (f64, f64) {
+    let (ux, uy) = cr.user_to_device(x, y);
+    let (sx, sy) = cr.target().device_scale();
+    (ux * sx, uy * sy)
+}
+
+/// Paint `surface` pixel-for-pixel with its top-left at device pixel
+/// `origin + offset`, whatever `cr`'s transform and the target's device scale.
+/// `scale` is [`device_scale`] of `cr`; `alpha` < 1 fades it.
+pub fn blit_at_device_alpha(
+    cr: &cairo::Context,
+    surface: &cairo::ImageSurface,
+    origin: (f64, f64),
+    offset: (f64, f64),
+    scale: f64,
+    alpha: f64,
+) {
+    // Back to user space at the device position, then 1 raster px = 1 device px.
+    let (sx, sy) = cr.target().device_scale();
+    let Ok((ux, uy)) = cr.device_to_user((origin.0 + offset.0) / sx, (origin.1 + offset.1) / sy)
+    else {
+        return;
+    };
+    let _ = cr.save();
+    cr.translate(ux, uy);
+    cr.scale(1.0 / scale, 1.0 / scale);
+    if cr.set_source_surface(surface, 0.0, 0.0).is_ok() {
+        let _ = if alpha < 1.0 {
+            cr.paint_with_alpha(alpha)
+        } else {
+            cr.paint()
+        };
+    }
+    let _ = cr.restore();
+}
+
+fn blit_at_device(
+    cr: &cairo::Context,
+    surface: &cairo::ImageSurface,
+    origin: (f64, f64),
+    offset: (f64, f64),
+    scale: f64,
+) {
+    blit_at_device_alpha(cr, surface, origin, offset, scale, 1.0);
 }
 
 /// Draw [`halo`] + [`paint`] of `layout` onto a fresh transparent surface sized
