@@ -30,8 +30,15 @@ so="${SO:-$root/target/release/libpwetty_box.so}"
 
 # One waybar config: `bars` bars, each with `per_bar` claude tiles.
 cfg="$scratch/bench-waybar.jsonc"
-samples=("$root"/tiles/claude/samples/*.json)
+# BENCH_SAMPLES=window,idle limits the cycle to those samples (by file stem).
+samples=()
+for f in "$root"/tiles/claude/samples/*.json; do
+  stem="$(basename "$f" .json)"
+  case ",${BENCH_SAMPLES:-$stem}," in *",$stem,"*) samples+=("$f") ;; esac
+done
+# BENCH_FPS=N pins every claude tile's animation rate (default: the module's).
 jq -n --arg so "$so" --argjson bars "$bars" --argjson per "$per_bar" \
+  --argjson fps "${BENCH_FPS:-null}" \
   --args '$ARGS.positional as $s
   | [range($bars) as $b
      | { layer: "top", position: "top", height: 100,
@@ -39,7 +46,8 @@ jq -n --arg so "$so" --argjson bars "$bars" --argjson per "$per_bar" \
        + ([range($per) as $i
            | { key: "cffi/pwetty#\($b)-\($i)",
                value: { module_path: $so, tile: "claude", stream: true, width: 179,
-                        exec: "jq -c . \($s[($b * $per + $i) % ($s | length)]); sleep infinity" } }]
+                        exec: "jq -c . \($s[($b * $per + $i) % ($s | length)]); sleep infinity" }
+                      + (if $fps then { fps: $fps } else {} end) }]
           | from_entries)]' "${samples[@]}" >"$cfg" || exit 1
 
 # BENCH_MIX=gl: one bar of every GL-backed tile kind instead — the femtovg demo
