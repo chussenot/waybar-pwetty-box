@@ -13,6 +13,7 @@ entirely owns what it *says*.
 
 ```bash
 mise run deps      # check the system libs a build needs
+mise run deps:install  # …or sudo apt install them (Debian/Ubuntu)
 mise run install   # build, put the `pwetty` CLI on PATH, restart waybar onto the new .so
 mise run check     # lint, tests, tiles, a headless render, docs
 mise tasks         # the rest

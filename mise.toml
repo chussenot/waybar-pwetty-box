@@ -37,6 +37,11 @@ echo "deps ok: $(pkg-config --modversion gtk+-3.0) gtk3, $(pkg-config --modversi
 description = "Print every Debian/Ubuntu package name a build + install needs"
 run = "awk '!/^#/ && NF { print $1 }' scripts/apt-packages.txt"
 
+[tasks."deps:install"]
+description = "Install every Debian/Ubuntu package a build + install needs (sudo apt)"
+# The opt-in counterpart to `deps`: sudo only when you ask for it by name.
+run = "sudo apt-get install -y --no-install-recommends $(mise run deps:list | tr '\\n' ' ')"
+
 [tasks."deps:list-ci"]
 description = "Print the package names CI needs (build, test, render — no live bar)"
 # CI never starts a bar, so it does not need waybar/psmisc/util-linux. It does
@@ -56,8 +61,12 @@ description = "Build, put the pwetty CLI on PATH, and restart waybar onto the fr
 # The .so is not copied anywhere: every `module_path` in the waybar config points
 # straight at target/release, so building it IS installing it. What actually has
 # to happen after a build is the restart below — see that task for why.
-depends = ["build"]
+# `deps` gates the build (sequenced in `run`, since mise runs `depends` in
+# parallel) so a box missing the -dev packages gets the apt hint, not an epoxy
+# pkg-config panic from deep inside cargo.
+depends = ["deps"]
 run = [
+  "mise run build",
   "install -Dm755 target/release/pwetty ~/.local/bin/pwetty",
   "mise run restart",
 ]
