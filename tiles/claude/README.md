@@ -71,7 +71,7 @@ Each `items[]` row:
 | field        | type        | source       | notes |
 |--------------|-------------|--------------|-------|
 | `kind`       | enum        | derive       | `session` \| `app` — optional; inferred from `state` vs `app` |
-| `state`      | enum        | REAL         | session rows, required: `working` \| `prompt` \| `idle` \| `shell` — drives the indicator |
+| `state`      | enum        | REAL         | session rows, required: `working` \| `prompt` \| `idle` \| `shell` \| `empty` — drives the indicator |
 | `folder`     | string      | REAL         | session rows: basename of the session `cwd` |
 | `unpushed`   | integer     | MOCK         | session rows: `↑N` after the folder; hidden when 0 or idle |
 | `idle_level` | integer 0–6 | REAL-derived | session rows, when `state=idle`: bright (0) → dim (6) |
@@ -82,7 +82,9 @@ Each `items[]` row:
 
 Indicators: `working`→deep-orange Claude mascot, `shell`→electric-cyan mascot,
 `idle`→fade bar + `idle_ago`, `prompt`→blinking `?`, an app row→its own icon
-inline. If **any** session row is `prompt`, the **whole tile pulses** (one
+inline, `empty`→no indicator at all (the bare shortcut: the producer's placeholder
+for a desktop with no session and no window, so it never looks like an idle
+session). If **any** session row is `prompt`, the **whole tile pulses** (one
 attention signal per desktop).
 
 ### Background agents: the bead strip
@@ -172,4 +174,4 @@ echo '{"shortcut":5,"items":[{"state":"working","folder":"api"}]}' \
 Samples in [`samples/`](./samples/): `working`, `prompt`, `idle`, `shell` (single
 sessions), `duo` (two sessions), `window` (a plain window), `duo-window` (two app
 rows — one bundled icon name, one absolute `.svg` path), `mixed` (a session row
-plus an app row).
+plus an app row), `empty` (a desktop with nothing on it).
