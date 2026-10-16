@@ -88,12 +88,36 @@ fn cmd_schema(rest: &[String]) -> ExitCode {
     }
 }
 
-/// Variable names referenced by a minijinja `template`.
+/// Names a template assigns to itself with `{% set name = ... %}`.
+///
+/// `undeclared_variables` reports a `{% set %}` made inside an `{% if %}` arm
+/// as undeclared, because its walk scopes the assignment to that arm. Jinja
+/// does not: `{% if %}` opens no scope, so the name is live afterwards — which
+/// is exactly how a tile picks a colour per status. Without this, every such
+/// name looks like a data field the schema forgot to declare.
+fn template_locals(template: &str) -> BTreeSet<String> {
+    template
+        .match_indices("{% set ")
+        .filter_map(|(i, m)| {
+            let rest = &template[i + m.len()..];
+            let name = rest.split('=').next()?.trim();
+            (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                .then(|| name.to_string())
+        })
+        .collect()
+}
+
+/// Data fields referenced by a minijinja `template` — what the tile's schema is
+/// expected to declare. Template-local `{% set %}` names are not data.
 fn template_vars(template: &str) -> Result<BTreeSet<String>, String> {
     let mut env = minijinja::Environment::new();
     env.add_template("t", template).map_err(|e| e.to_string())?;
     let t = env.get_template("t").map_err(|e| e.to_string())?;
-    Ok(t.undeclared_variables(true).into_iter().collect())
+    let locals = template_locals(template);
+    Ok(t.undeclared_variables(true)
+        .into_iter()
+        .filter(|v| !locals.contains(v))
+        .collect())
 }
 
 /// Property names declared in a tile's JSON Schema.
@@ -313,5 +337,26 @@ fn cmd_render(rest: &[String]) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{template_locals, template_vars};
+
+    /// A `{% set %}` inside an `{% if %}` arm is a template local, not a data
+    /// field — the quivive tile picks its accent colour that way.
+    #[test]
+    fn set_names_are_locals_not_data_fields() {
+        let t = "{% if status == 'x' %}{% set hue = '#f38ba8' %}\
+                 {% else %}{% set hue = '#585b70' %}{% endif %}\
+                 <span foreground='{{ hue }}'>{{ status }}</span>";
+        assert!(template_locals(t).contains("hue"));
+        let vars = template_vars(t).expect("template parses");
+        assert!(vars.contains("status"));
+        assert!(
+            !vars.contains("hue"),
+            "local leaked into data fields: {vars:?}"
+        );
     }
 }
