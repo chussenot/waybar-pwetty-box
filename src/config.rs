@@ -38,6 +38,10 @@ pub struct Config {
     /// `#rrggbbaa`). Omit for a transparent tile (the bar shows through — the
     /// Cairo composite honors per-pixel alpha); set it for an opaque tile.
     pub background: Option<String>,
+    /// Corner radius of the focus bubble (the active-desktop card and the
+    /// `<bg>` shader mask), in logical px. Unset defaults to 20% of the bubble
+    /// height; `0` gives square corners.
+    pub corner_radius: Option<f64>,
 
     // --- content source (see `crate::content`) ---
     /// Static tile text. Supports `\n` for multiline. Ignored if `exec` is set.
@@ -148,6 +152,7 @@ impl Default for Config {
             icon_font_path: None,
             font_size: 14.0,
             background: None,
+            corner_radius: None,
             font_family: None,
             align: None,
             text: None,
@@ -217,6 +222,13 @@ mod tests {
         assert_eq!(c.fps, 60);
         assert!(c.font_path.is_none());
         assert!(c.background.is_none());
+    }
+
+    #[test]
+    fn corner_radius_parses_and_defaults_none() {
+        let c: Config = serde_json::from_str(r#"{ "corner_radius": 0.0 }"#).unwrap();
+        assert_eq!(c.corner_radius, Some(0.0));
+        assert!(Config::default().corner_radius.is_none());
     }
 
     #[test]
