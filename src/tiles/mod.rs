@@ -51,6 +51,7 @@ const CLAUDE: TilePreset = TilePreset {
             include_str!(tile_dir!("samples/duo-window.json")),
         ),
         ("mixed", include_str!(tile_dir!("samples/mixed.json"))),
+        ("empty", include_str!(tile_dir!("samples/empty.json"))),
     ],
 };
 
@@ -108,7 +109,8 @@ mod tests {
                 "fleet-duo",
                 "window",
                 "duo-window",
-                "mixed"
+                "mixed",
+                "empty"
             ]
         );
         for (name, json) in p.samples {
